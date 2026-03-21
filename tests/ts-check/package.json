@@ -3,6 +3,7 @@
   "devDependencies": {
     "typescript": "^5",
     "@mysten/sui": "^2.9",
-    "@mysten/bcs": "^2"
+    "@mysten/bcs": "^2",
+    "@types/node": "^22"
   }
 }
