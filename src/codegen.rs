@@ -154,7 +154,8 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
         "import type { TransactionObjectInput, TransactionResult } from '@mysten/sui/transactions';",
     );
     w.line("import { Transaction } from '@mysten/sui/transactions';");
-    w.line("import { Move2TsConfigError, validateSuiAddress } from './move2ts-errors';");
+    w.line("import { isValidSuiAddress } from '@mysten/sui/utils';");
+    w.line("import { Move2TsConfigError } from './move2ts-errors';");
     w.blank();
 
     // --- Package ID lazy getter ---
@@ -203,17 +204,6 @@ pub fn generate_errors_module() -> String {
     w.dedent();
     w.line("}");
     w.blank();
-    w.line("export function validateSuiAddress(value: string, name: string): string {");
-    w.indent();
-    w.line("if (!/^0x[0-9a-fA-F]{1,64}$/.test(value)) {");
-    w.indent();
-    w.line("throw new Move2TsConfigError(`${name} is not a valid Sui address: ${value}`);");
-    w.dedent();
-    w.line("}");
-    w.line("return value;");
-    w.dedent();
-    w.line("}");
-    w.blank();
 
     w.into_string()
 }
@@ -230,7 +220,14 @@ fn generate_package_id_getter(w: &mut CodeWriter, env_var_name: &str) {
     ));
     w.dedent();
     w.line("}");
-    w.line(&format!("return validateSuiAddress(id, '{env_var_name}');"));
+    w.line("if (!isValidSuiAddress(id)) {");
+    w.indent();
+    w.line(&format!(
+        "throw new Move2TsConfigError(`{env_var_name} is not a valid Sui address: ${{id}}`);"
+    ));
+    w.dedent();
+    w.line("}");
+    w.line("return id;");
     w.dedent();
     w.line("}");
 }
@@ -254,7 +251,14 @@ fn generate_singleton_getter(w: &mut CodeWriter, project_name: &str, struct_name
     ));
     w.dedent();
     w.line("}");
-    w.line(&format!("return validateSuiAddress(id, '{env_var}');"));
+    w.line("if (!isValidSuiAddress(id)) {");
+    w.indent();
+    w.line(&format!(
+        "throw new Move2TsConfigError(`{env_var} is not a valid Sui address: ${{id}}`);"
+    ));
+    w.dedent();
+    w.line("}");
+    w.line("return id;");
     w.dedent();
     w.line("}");
 }
@@ -670,8 +674,7 @@ mod tests {
     fn generates_errors_module() {
         let output = generate_errors_module();
         assert!(output.contains("export class Move2TsConfigError extends Error"));
-        assert!(output.contains("export function validateSuiAddress"));
-        assert!(output.contains("/^0x[0-9a-fA-F]{1,64}$/"));
+        assert!(!output.contains("validateSuiAddress")); // removed — uses @mysten/sui/utils
     }
 
     #[test]
@@ -701,7 +704,9 @@ mod tests {
 
         let output = generate_module(&module, &config);
         assert!(output.contains("import process from 'node:process';"));
+        assert!(output.contains("import { isValidSuiAddress } from '@mysten/sui/utils';"));
         assert!(output.contains("function getPackageId(): string {"));
+        assert!(output.contains("isValidSuiAddress(id)"));
         assert!(output.contains("MY_PROJECT_PACKAGE_ID"));
         assert!(output.contains("export function listItem("));
         assert!(output.contains("price: bigint;"));

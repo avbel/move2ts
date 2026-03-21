@@ -136,8 +136,7 @@ fn errors_module_generates_valid_content() {
     let output = generate_errors_module();
     assert!(output.contains("export class Move2TsConfigError extends Error"));
     assert!(output.contains("override readonly name = 'Move2TsConfigError' as const;"));
-    assert!(output.contains("export function validateSuiAddress"));
-    assert!(output.contains("/^0x[0-9a-fA-F]{1,64}$/"));
+    assert!(!output.contains("validateSuiAddress"));
 }
 
 #[test]
@@ -236,9 +235,21 @@ export declare class Transaction {
     )
     .expect("write sui stubs");
 
+    // Write utils stub (isValidSuiAddress)
+    fs::create_dir_all(sui_dir.join("utils")).expect("create utils dir");
+    fs::write(
+        sui_dir.join("utils/index.d.ts"),
+        r#"
+export declare function isValidSuiAddress(value: string): value is string;
+export declare function isValidSuiObjectId(value: string): boolean;
+export declare function normalizeSuiAddress(value: string): string;
+"#,
+    )
+    .expect("write utils stubs");
+
     fs::write(
         sui_dir.join("package.json"),
-        r#"{"name": "@mysten/sui", "exports": {"./transactions": "./transactions/index.d.ts"}}"#,
+        r#"{"name": "@mysten/sui", "exports": {"./transactions": "./transactions/index.d.ts", "./utils": "./utils/index.d.ts"}}"#,
     )
     .expect("write package.json");
 

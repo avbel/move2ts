@@ -114,14 +114,18 @@ Given a Move module with a marketplace, move2ts produces TypeScript like this:
 import process from 'node:process';
 import type { TransactionObjectInput, TransactionResult } from '@mysten/sui/transactions';
 import { Transaction } from '@mysten/sui/transactions';
-import { Move2TsConfigError, validateSuiAddress } from './move2ts-errors';
+import { isValidSuiAddress } from '@mysten/sui/utils';
+import { Move2TsConfigError } from './move2ts-errors';
 
 function getPackageId(): string {
   const id = process.env.MY_PROJECT_PACKAGE_ID;
   if (!id) {
     throw new Move2TsConfigError('MY_PROJECT_PACKAGE_ID environment variable is not set');
   }
-  return validateSuiAddress(id, 'MY_PROJECT_PACKAGE_ID');
+  if (!isValidSuiAddress(id)) {
+    throw new Move2TsConfigError(`MY_PROJECT_PACKAGE_ID is not a valid Sui address: ${id}`);
+  }
+  return id;
 }
 
 function getMarketplaceId(): string {
@@ -129,7 +133,10 @@ function getMarketplaceId(): string {
   if (!id) {
     throw new Move2TsConfigError('MY_PROJECT_MARKETPLACE_ID environment variable is not set');
   }
-  return validateSuiAddress(id, 'MY_PROJECT_MARKETPLACE_ID');
+  if (!isValidSuiAddress(id)) {
+    throw new Move2TsConfigError(`MY_PROJECT_MARKETPLACE_ID is not a valid Sui address: ${id}`);
+  }
+  return id;
 }
 
 // Entry function -- singleton resolved lazily
@@ -192,7 +199,7 @@ Key points in the generated code:
 - **Clock and Random are auto-injected.** Move functions that accept `&Clock` or `&Random` have those parameters stripped from the TypeScript signature; the generated code passes `tx.object.clock()` or `tx.object.random()` automatically.
 - **All functions return `TransactionResult`.** This enables composability -- callers can destructure results and pass them to subsequent transaction commands.
 
-A shared `move2ts-errors.ts` file is also generated with `Move2TsConfigError` and `validateSuiAddress` utilities.
+A shared `move2ts-errors.ts` file is also generated with the `Move2TsConfigError` class. Address validation uses `isValidSuiAddress` from `@mysten/sui/utils`.
 
 ## Usage Scenarios
 
