@@ -297,20 +297,15 @@ fn generate_event_types(w: &mut CodeWriter, module: &ModuleInfo) {
     w.blank();
     for event in events {
         // If also used as a function param, add "Event" suffix to avoid name collision
-        // But don't double-suffix names already ending in "Event" (avoid "SomeEventEvent")
         let type_name = if referenced.contains(&event.name) {
-            if event.name.ends_with("Event") {
-                event.name.clone()
-            } else {
-                format!("{}Event", event.name)
-            }
+            format!("{}Event", event.name)
         } else {
             event.name.clone()
         };
         w.line(&format!("export type {type_name} = {{"));
         w.indent();
         for (field_name, _) in &event.fields {
-            w.line(&format!("{}: string;", to_camel_case(field_name)));
+            w.line(&format!("readonly {}: string;", to_camel_case(field_name)));
         }
         w.dedent();
         w.line("};");
@@ -1110,7 +1105,10 @@ mod tests {
         assert_eq!(to_bcs_schema(&opt_bool), "bcs.option(bcs.bool())");
 
         let vec_opt_u8 = MoveType::Vector(Box::new(MoveType::Option(Box::new(MoveType::U8))));
-        assert_eq!(to_bcs_schema(&vec_opt_u8), "bcs.vector(bcs.option(bcs.u8()))");
+        assert_eq!(
+            to_bcs_schema(&vec_opt_u8),
+            "bcs.vector(bcs.option(bcs.u8()))"
+        );
     }
 
     #[test]
@@ -1234,9 +1232,18 @@ mod tests {
         };
 
         let output = generate_module(&module, &config);
-        assert!(output.contains("import { bcs } from '@mysten/bcs';"), "should import bcs");
-        assert!(output.contains("bcs.struct('Config'"), "should use BCS struct encoding");
-        assert!(!output.contains("tx.object(args.config)"), "should NOT use tx.object for pure struct");
+        assert!(
+            output.contains("import { bcs } from '@mysten/bcs';"),
+            "should import bcs"
+        );
+        assert!(
+            output.contains("bcs.struct('Config'"),
+            "should use BCS struct encoding"
+        );
+        assert!(
+            !output.contains("tx.object(args.config)"),
+            "should NOT use tx.object for pure struct"
+        );
     }
 
     #[test]
@@ -1280,7 +1287,10 @@ mod tests {
         };
 
         let output = generate_module(&module, &config);
-        assert!(!output.contains("@mysten/bcs"), "should NOT import bcs when no pure structs");
+        assert!(
+            !output.contains("@mysten/bcs"),
+            "should NOT import bcs when no pure structs"
+        );
     }
 
     // ---- Event type generation tests ----
@@ -1290,19 +1300,17 @@ mod tests {
         let module = ModuleInfo {
             name: "marketplace".to_string(),
             functions: vec![],
-            structs: vec![
-                StructInfo {
-                    name: "ItemPurchased".to_string(),
-                    fields: vec![
-                        ("buyer".to_string(), MoveType::Address),
-                        ("price".to_string(), MoveType::U64),
-                        ("item_id".to_string(), MoveType::Address),
-                    ],
-                    has_key: false,
-                    has_copy: true,
-                    has_drop: true,
-                },
-            ],
+            structs: vec![StructInfo {
+                name: "ItemPurchased".to_string(),
+                fields: vec![
+                    ("buyer".to_string(), MoveType::Address),
+                    ("price".to_string(), MoveType::U64),
+                    ("item_id".to_string(), MoveType::Address),
+                ],
+                has_key: false,
+                has_copy: true,
+                has_drop: true,
+            }],
             singletons: HashSet::new(),
             emitted_events: HashSet::from(["ItemPurchased".to_string()]),
         };
@@ -1316,9 +1324,9 @@ mod tests {
         let output = generate_module(&module, &config);
         assert!(output.contains("// --- Event Types ---"));
         assert!(output.contains("export type ItemPurchased = {"));
-        assert!(output.contains("buyer: string;"));
-        assert!(output.contains("price: string;"));
-        assert!(output.contains("itemId: string;"));
+        assert!(output.contains("readonly buyer: string;"));
+        assert!(output.contains("readonly price: string;"));
+        assert!(output.contains("readonly itemId: string;"));
     }
 
     #[test]
@@ -1326,17 +1334,13 @@ mod tests {
         let module = ModuleInfo {
             name: "marketplace".to_string(),
             functions: vec![],
-            structs: vec![
-                StructInfo {
-                    name: "ItemPurchased".to_string(),
-                    fields: vec![
-                        ("buyer".to_string(), MoveType::Address),
-                    ],
-                    has_key: false,
-                    has_copy: true,
-                    has_drop: true,
-                },
-            ],
+            structs: vec![StructInfo {
+                name: "ItemPurchased".to_string(),
+                fields: vec![("buyer".to_string(), MoveType::Address)],
+                has_key: false,
+                has_copy: true,
+                has_drop: true,
+            }],
             singletons: HashSet::new(),
             emitted_events: HashSet::from(["ItemPurchased".to_string()]),
         };
@@ -1375,18 +1379,14 @@ mod tests {
             structs: vec![
                 StructInfo {
                     name: "PriceRange".to_string(),
-                    fields: vec![
-                        ("min_price".to_string(), MoveType::U64),
-                    ],
+                    fields: vec![("min_price".to_string(), MoveType::U64)],
                     has_key: false,
                     has_copy: true,
                     has_drop: true,
                 },
                 StructInfo {
                     name: "ItemPurchased".to_string(),
-                    fields: vec![
-                        ("buyer".to_string(), MoveType::Address),
-                    ],
+                    fields: vec![("buyer".to_string(), MoveType::Address)],
                     has_key: false,
                     has_copy: true,
                     has_drop: true,
@@ -1431,18 +1431,16 @@ mod tests {
                 has_clock_param: false,
                 has_random_param: false,
             }],
-            structs: vec![
-                StructInfo {
-                    name: "TradeExecuted".to_string(),
-                    fields: vec![
-                        ("buyer".to_string(), MoveType::Address),
-                        ("amount".to_string(), MoveType::U64),
-                    ],
-                    has_key: false,
-                    has_copy: true,
-                    has_drop: true,
-                },
-            ],
+            structs: vec![StructInfo {
+                name: "TradeExecuted".to_string(),
+                fields: vec![
+                    ("buyer".to_string(), MoveType::Address),
+                    ("amount".to_string(), MoveType::U64),
+                ],
+                has_key: false,
+                has_copy: true,
+                has_drop: true,
+            }],
             singletons: HashSet::new(),
             emitted_events: HashSet::from(["TradeExecuted".to_string()]),
         };
@@ -1458,9 +1456,9 @@ mod tests {
         assert!(output.contains("export interface TradeExecuted {"));
         // Should have event type WITH Event suffix (for event consumption)
         assert!(output.contains("export type TradeExecutedEvent = {"));
-        // Event fields should all be string
-        assert!(output.contains("buyer: string;"));
-        assert!(output.contains("amount: string;"));
+        // Event fields should all be readonly string
+        assert!(output.contains("readonly buyer: string;"));
+        assert!(output.contains("readonly amount: string;"));
     }
 
     #[test]
@@ -1468,15 +1466,13 @@ mod tests {
         let module = ModuleInfo {
             name: "marketplace".to_string(),
             functions: vec![],
-            structs: vec![
-                StructInfo {
-                    name: "Marketplace".to_string(),
-                    fields: vec![],
-                    has_key: true,
-                    has_copy: false,
-                    has_drop: false,
-                },
-            ],
+            structs: vec![StructInfo {
+                name: "Marketplace".to_string(),
+                fields: vec![],
+                has_key: true,
+                has_copy: false,
+                has_drop: false,
+            }],
             singletons: HashSet::new(),
             emitted_events: HashSet::new(), // nothing emitted
         };
@@ -1493,8 +1489,9 @@ mod tests {
     }
 
     #[test]
-    fn event_suffix_not_doubled() {
-        // If struct name already ends with "Event", don't add another "Event"
+    fn event_suffix_always_added_on_collision() {
+        // If struct name already ends with "Event" but collides with a param interface,
+        // still add "Event" suffix — a collision is worse than an ugly name.
         let module = ModuleInfo {
             name: "trading".to_string(),
             functions: vec![FunctionInfo {
@@ -1531,9 +1528,8 @@ mod tests {
         };
 
         let output = generate_module(&module, &config);
-        // Should be "TradeEvent", NOT "TradeEventEvent"
-        assert!(output.contains("export type TradeEvent = {"));
-        assert!(!output.contains("TradeEventEvent"));
+        // Should be "TradeEventEvent" to avoid collision with the param interface
+        assert!(output.contains("export type TradeEventEvent = {"));
     }
 
     #[test]
@@ -1553,10 +1549,7 @@ mod tests {
                     ("sender".to_string(), MoveType::Address),
                     ("name".to_string(), MoveType::SuiString),
                     ("obj_id".to_string(), MoveType::ObjectId),
-                    (
-                        "data".to_string(),
-                        MoveType::Vector(Box::new(MoveType::U8)),
-                    ),
+                    ("data".to_string(), MoveType::Vector(Box::new(MoveType::U8))),
                     (
                         "scores".to_string(),
                         MoveType::Vector(Box::new(MoveType::U64)),
@@ -1588,23 +1581,38 @@ mod tests {
         let event_end = output[event_start..].find("};").unwrap() + event_start + 2;
         let event_block = &output[event_start..event_end];
 
-        // Every field line must end with ": string;"
+        // Every field line must be "readonly <name>: string;"
         for line in event_block.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("export type") || trimmed == "};" || trimmed.is_empty() {
                 continue;
             }
             assert!(
-                trimmed.ends_with(": string;"),
-                "Event field should be string but got: '{trimmed}'"
+                trimmed.starts_with("readonly ") && trimmed.ends_with(": string;"),
+                "Event field should be readonly string but got: '{trimmed}'"
             );
         }
 
         // Verify NO Move-mapped types leaked through
-        assert!(!event_block.contains("number"), "number should not appear in event type");
-        assert!(!event_block.contains("bigint"), "bigint should not appear in event type");
-        assert!(!event_block.contains("boolean"), "boolean should not appear in event type");
-        assert!(!event_block.contains("Uint8Array"), "Uint8Array should not appear in event type");
-        assert!(!event_block.contains("null"), "null should not appear in event type");
+        assert!(
+            !event_block.contains("number"),
+            "number should not appear in event type"
+        );
+        assert!(
+            !event_block.contains("bigint"),
+            "bigint should not appear in event type"
+        );
+        assert!(
+            !event_block.contains("boolean"),
+            "boolean should not appear in event type"
+        );
+        assert!(
+            !event_block.contains("Uint8Array"),
+            "Uint8Array should not appear in event type"
+        );
+        assert!(
+            !event_block.contains("null"),
+            "null should not appear in event type"
+        );
     }
 }

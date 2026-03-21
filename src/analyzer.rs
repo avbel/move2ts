@@ -241,124 +241,93 @@ fn convert_single_name(
     }
 }
 
-/// Extracts the struct name from a `NameAccessChain` used in a `Pack` expression.
-fn extract_pack_struct_name(chain: &move_compiler::parser::ast::NameAccessChain) -> Option<String> {
-    match &chain.value {
-        NameAccessChain_::Single(entry) => Some(entry.name.value.as_str().to_string()),
-        NameAccessChain_::Path(name_path) => name_path
-            .entries
-            .last()
-            .map(|e| e.name.value.as_str().to_string()),
-    }
-}
-
-/// Recursively walks an expression tree to find all `Pack` (struct constructor) expressions.
-/// Collects struct names that are constructed.
-fn collect_packs_from_exp(exp: &Exp, constructors: &mut HashSet<String>) {
+/// Generic AST expression walker. Calls `visitor` on every expression node, then recurses.
+fn walk_exp(exp: &Exp, visitor: &mut impl FnMut(&Exp)) {
+    visitor(exp);
     match &exp.value {
-        Exp_::Pack(chain, fields) => {
-            if let Some(name) = extract_pack_struct_name(chain) {
-                constructors.insert(name);
-            }
+        Exp_::Pack(_, fields) => {
             for (_field, field_exp) in fields {
-                collect_packs_from_exp(field_exp, constructors);
+                walk_exp(field_exp, visitor);
             }
         }
         Exp_::Call(_, args) => {
             for arg in &args.value {
-                collect_packs_from_exp(arg, constructors);
+                walk_exp(arg, visitor);
             }
         }
         Exp_::Block(seq) => {
-            collect_packs_from_sequence(seq, constructors);
+            walk_sequence(seq, visitor);
         }
         Exp_::IfElse(cond, then_exp, else_exp) => {
-            collect_packs_from_exp(cond, constructors);
-            collect_packs_from_exp(then_exp, constructors);
+            walk_exp(cond, visitor);
+            walk_exp(then_exp, visitor);
             if let Some(else_e) = else_exp {
-                collect_packs_from_exp(else_e, constructors);
+                walk_exp(else_e, visitor);
             }
         }
         Exp_::While(cond, body) => {
-            collect_packs_from_exp(cond, constructors);
-            collect_packs_from_exp(body, constructors);
+            walk_exp(cond, visitor);
+            walk_exp(body, visitor);
         }
         Exp_::Loop(body) => {
-            collect_packs_from_exp(body, constructors);
+            walk_exp(body, visitor);
         }
         Exp_::Labeled(_, inner) => {
-            collect_packs_from_exp(inner, constructors);
+            walk_exp(inner, visitor);
         }
         Exp_::Assign(lhs, rhs) => {
-            collect_packs_from_exp(lhs, constructors);
-            collect_packs_from_exp(rhs, constructors);
+            walk_exp(lhs, visitor);
+            walk_exp(rhs, visitor);
         }
-        Exp_::Return(_, Some(inner)) => {
-            collect_packs_from_exp(inner, constructors);
-        }
-        Exp_::Abort(Some(inner)) => {
-            collect_packs_from_exp(inner, constructors);
-        }
-        Exp_::Dereference(inner) => {
-            collect_packs_from_exp(inner, constructors);
-        }
-        Exp_::UnaryExp(_, inner) => {
-            collect_packs_from_exp(inner, constructors);
+        Exp_::Return(_, Some(inner))
+        | Exp_::Abort(Some(inner))
+        | Exp_::Dereference(inner)
+        | Exp_::UnaryExp(_, inner)
+        | Exp_::Borrow(_, inner)
+        | Exp_::Dot(inner, _, _)
+        | Exp_::Cast(inner, _)
+        | Exp_::Annotate(inner, _)
+        | Exp_::Parens(inner)
+        | Exp_::Move(_, inner)
+        | Exp_::Copy(_, inner) => {
+            walk_exp(inner, visitor);
         }
         Exp_::BinopExp(lhs, _, rhs) => {
-            collect_packs_from_exp(lhs, constructors);
-            collect_packs_from_exp(rhs, constructors);
-        }
-        Exp_::Borrow(_, inner) => {
-            collect_packs_from_exp(inner, constructors);
-        }
-        Exp_::Dot(inner, _, _) => {
-            collect_packs_from_exp(inner, constructors);
+            walk_exp(lhs, visitor);
+            walk_exp(rhs, visitor);
         }
         Exp_::DotCall(inner, _, _, _, _, args) => {
-            collect_packs_from_exp(inner, constructors);
+            walk_exp(inner, visitor);
             for arg in &args.value {
-                collect_packs_from_exp(arg, constructors);
+                walk_exp(arg, visitor);
             }
-        }
-        Exp_::Cast(inner, _) => {
-            collect_packs_from_exp(inner, constructors);
-        }
-        Exp_::Annotate(inner, _) => {
-            collect_packs_from_exp(inner, constructors);
         }
         Exp_::ExpList(exps) => {
             for e in exps {
-                collect_packs_from_exp(e, constructors);
+                walk_exp(e, visitor);
             }
         }
-        Exp_::Parens(inner) => {
-            collect_packs_from_exp(inner, constructors);
-        }
-        Exp_::Move(_, inner) | Exp_::Copy(_, inner) => {
-            collect_packs_from_exp(inner, constructors);
-        }
         Exp_::Lambda(_, _, body) => {
-            collect_packs_from_exp(body, constructors);
+            walk_exp(body, visitor);
         }
         Exp_::Vector(_, _, args) => {
             for arg in &args.value {
-                collect_packs_from_exp(arg, constructors);
+                walk_exp(arg, visitor);
             }
         }
         Exp_::Match(subject, arms) => {
-            collect_packs_from_exp(subject, constructors);
+            walk_exp(subject, visitor);
             for arm in &arms.value {
                 if let Some(guard) = &arm.value.guard {
-                    collect_packs_from_exp(guard, constructors);
+                    walk_exp(guard, visitor);
                 }
-                collect_packs_from_exp(&arm.value.rhs, constructors);
+                walk_exp(&arm.value.rhs, visitor);
             }
         }
         Exp_::Index(inner, args) => {
-            collect_packs_from_exp(inner, constructors);
+            walk_exp(inner, visitor);
             for arg in &args.value {
-                collect_packs_from_exp(arg, constructors);
+                walk_exp(arg, visitor);
             }
         }
         // Terminal nodes or nodes without sub-expressions we care about
@@ -376,21 +345,17 @@ fn collect_packs_from_exp(exp: &Exp, constructors: &mut HashSet<String>) {
     }
 }
 
-/// Recursively walks a sequence (block body) to find Pack expressions.
-fn collect_packs_from_sequence(seq: &Sequence, constructors: &mut HashSet<String>) {
+/// Walks a sequence (block body), calling `visitor` on every expression node.
+fn walk_sequence(seq: &Sequence, visitor: &mut impl FnMut(&Exp)) {
     for item in &seq.1 {
         match &item.value {
-            SequenceItem_::Seq(exp) => {
-                collect_packs_from_exp(exp, constructors);
-            }
-            SequenceItem_::Bind(_, _, exp) => {
-                collect_packs_from_exp(exp, constructors);
-            }
+            SequenceItem_::Seq(exp) => walk_exp(exp, visitor),
+            SequenceItem_::Bind(_, _, exp) => walk_exp(exp, visitor),
             SequenceItem_::Declare(_, _) => {}
         }
     }
     if let Some(trailing_exp) = seq.3.as_ref() {
-        collect_packs_from_exp(trailing_exp, constructors);
+        walk_exp(trailing_exp, visitor);
     }
 }
 
@@ -405,7 +370,13 @@ fn build_constructor_map(module_def: &ModuleDefinition) -> HashMap<String, HashS
 
             if let FunctionBody_::Defined(seq) = &func.body.value {
                 let mut constructors = HashSet::new();
-                collect_packs_from_sequence(seq, &mut constructors);
+                walk_sequence(seq, &mut |e| {
+                    if let Exp_::Pack(chain, _) = &e.value
+                        && let Some(name) = extract_name_from_chain(chain)
+                    {
+                        constructors.insert(name);
+                    }
+                });
 
                 for struct_name in constructors {
                     constructor_map
@@ -451,110 +422,21 @@ fn detect_emitted_events(module_def: &ModuleDefinition) -> HashSet<String> {
 
     for member in &module_def.members {
         if let ModuleMember::Function(func) = member
-            && let FunctionBody_::Defined(seq) = &func.body.value {
-                collect_emit_calls_from_sequence(seq, &mut emitted);
-            }
+            && let FunctionBody_::Defined(seq) = &func.body.value
+        {
+            walk_sequence(seq, &mut |e| {
+                if let Exp_::Call(chain, args) = &e.value
+                    && is_emit_call(chain)
+                {
+                    for arg in &args.value {
+                        collect_emitted_struct_name(arg, &mut emitted);
+                    }
+                }
+            });
+        }
     }
 
     emitted
-}
-
-/// Recursively walks expressions looking for `event::emit(StructName { ... })` calls.
-fn collect_emit_calls_from_exp(exp: &Exp, emitted: &mut HashSet<String>) {
-    match &exp.value {
-        Exp_::Call(chain, args) => {
-            if is_emit_call(chain) {
-                // The argument to emit() is typically a Pack (struct constructor)
-                for arg in &args.value {
-                    collect_emitted_struct_name(arg, emitted);
-                }
-            }
-            // Also recurse into args for nested calls
-            for arg in &args.value {
-                collect_emit_calls_from_exp(arg, emitted);
-            }
-        }
-        Exp_::Pack(_chain, fields) => {
-            for (_field, field_exp) in fields {
-                collect_emit_calls_from_exp(field_exp, emitted);
-            }
-        }
-        Exp_::Block(seq) => {
-            collect_emit_calls_from_sequence(seq, emitted);
-        }
-        Exp_::IfElse(cond, then_exp, else_exp) => {
-            collect_emit_calls_from_exp(cond, emitted);
-            collect_emit_calls_from_exp(then_exp, emitted);
-            if let Some(else_e) = else_exp {
-                collect_emit_calls_from_exp(else_e, emitted);
-            }
-        }
-        Exp_::While(cond, body) => {
-            collect_emit_calls_from_exp(cond, emitted);
-            collect_emit_calls_from_exp(body, emitted);
-        }
-        Exp_::Loop(body) => {
-            collect_emit_calls_from_exp(body, emitted);
-        }
-        Exp_::Labeled(_, inner) => {
-            collect_emit_calls_from_exp(inner, emitted);
-        }
-        Exp_::Assign(lhs, rhs) => {
-            collect_emit_calls_from_exp(lhs, emitted);
-            collect_emit_calls_from_exp(rhs, emitted);
-        }
-        Exp_::DotCall(inner, _, _, _, _, args) => {
-            collect_emit_calls_from_exp(inner, emitted);
-            for arg in &args.value {
-                collect_emit_calls_from_exp(arg, emitted);
-            }
-        }
-        Exp_::Lambda(_, _, body) => {
-            collect_emit_calls_from_exp(body, emitted);
-        }
-        Exp_::ExpList(exps) => {
-            for e in exps {
-                collect_emit_calls_from_exp(e, emitted);
-            }
-        }
-        Exp_::Return(_, Some(inner))
-        | Exp_::Abort(Some(inner))
-        | Exp_::Dereference(inner)
-        | Exp_::UnaryExp(_, inner)
-        | Exp_::Borrow(_, inner)
-        | Exp_::Dot(inner, _, _)
-        | Exp_::Cast(inner, _)
-        | Exp_::Annotate(inner, _)
-        | Exp_::Move(_, inner)
-        | Exp_::Copy(_, inner) => {
-            collect_emit_calls_from_exp(inner, emitted);
-        }
-        Exp_::BinopExp(lhs, _, rhs) => {
-            collect_emit_calls_from_exp(lhs, emitted);
-            collect_emit_calls_from_exp(rhs, emitted);
-        }
-        Exp_::Match(scrutinee, arms) => {
-            collect_emit_calls_from_exp(scrutinee, emitted);
-            for arm in &arms.value {
-                collect_emit_calls_from_exp(&arm.value.rhs, emitted);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Walks a sequence (block body) for emit calls.
-fn collect_emit_calls_from_sequence(seq: &Sequence, emitted: &mut HashSet<String>) {
-    for item in &seq.1 {
-        match &item.value {
-            SequenceItem_::Seq(exp) => collect_emit_calls_from_exp(exp, emitted),
-            SequenceItem_::Bind(_, _, exp) => collect_emit_calls_from_exp(exp, emitted),
-            SequenceItem_::Declare(_, _) => {}
-        }
-    }
-    if let Some(trailing_exp) = seq.3.as_ref() {
-        collect_emit_calls_from_exp(trailing_exp, emitted);
-    }
 }
 
 /// Checks if a NameAccessChain refers to `emit` / `event::emit` / `sui::event::emit`.
@@ -564,10 +446,11 @@ fn is_emit_call(chain: &NameAccessChain) -> bool {
         NameAccessChain_::Path(path) => {
             // Check last entry is "emit"
             if let Some(last) = path.entries.last()
-                && last.name.value.as_str() == "emit" {
-                    // Optionally verify the path includes "event"
-                    return true;
-                }
+                && last.name.value.as_str() == "emit"
+            {
+                // Optionally verify the path includes "event"
+                return true;
+            }
             false
         }
     }

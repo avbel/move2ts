@@ -75,6 +75,7 @@ Options:
   --skip-methods <m1,m2>           Skip these methods
   --singletons <Struct1,Struct2>   Manual singleton overrides (struct names)
   --package-id-name <ENV_VAR>      Override package ID env var name
+  --events                         Include event type definitions in output
 ```
 
 ### Environment Variables
@@ -203,6 +204,25 @@ Key points in the generated code:
 When a function parameter is a pure value struct (has `copy` and `drop` abilities but no `key`), the generated code imports `bcs` from `@mysten/bcs` and serializes the struct using BCS encoding instead of `tx.object()`.
 
 A shared `move2ts-errors.ts` file is also generated with the `Move2TsConfigError` class. Address validation uses `isValidSuiAddress` from `@mysten/sui/utils`.
+
+### Event Types (`--events`)
+
+When `--events` is passed, the tool detects structs emitted via `event::emit()` and generates `export type` declarations with all fields as `readonly string`:
+
+```typescript
+// --- Event Types ---
+
+export type ItemPurchased = {
+  readonly buyer: string;
+  readonly seller: string;
+  readonly price: string;
+  readonly itemId: string;
+};
+```
+
+Event detection works by scanning function bodies for `event::emit()` calls. Only actually emitted structs are included — copy+drop structs that are never emitted are excluded.
+
+If a struct is both emitted AND used as a function parameter, two types are generated: a BCS `interface` (for the param) and a `type` with an `Event` suffix (for event consumption).
 
 ## Usage Scenarios
 

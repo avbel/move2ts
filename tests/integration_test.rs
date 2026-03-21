@@ -67,7 +67,7 @@ fn full_pipeline_marketplace() {
     let config = CodegenConfig {
         package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
         project_name: "my_project".to_string(),
-            include_events: false,
+        include_events: false,
     };
     let ts_output = generate_module(module, &config);
 
@@ -122,7 +122,7 @@ fn full_pipeline_defi_generics() {
     let config = CodegenConfig {
         package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
         project_name: "my_project".to_string(),
-            include_events: false,
+        include_events: false,
     };
     let ts_output = generate_module(module, &config);
 
@@ -135,8 +135,7 @@ fn full_pipeline_defi_generics() {
 
 #[test]
 fn full_pipeline_pure_structs() {
-    let source =
-        fs::read_to_string("tests/fixtures/pure_structs.move").expect("fixture exists");
+    let source = fs::read_to_string("tests/fixtures/pure_structs.move").expect("fixture exists");
     let modules = parse_and_extract(&source);
 
     assert_eq!(modules.len(), 1);
@@ -217,7 +216,7 @@ fn full_pipeline_pure_structs() {
     let codegen_config = CodegenConfig {
         package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
         project_name: "my_project".to_string(),
-            include_events: false,
+        include_events: false,
     };
     let ts_output = generate_module(module, &codegen_config);
 
@@ -310,9 +309,9 @@ fn full_pipeline_events() {
     assert!(ts_output.contains("export type ListingCreated = {"));
     assert!(ts_output.contains("export type FeeCollected = {"));
 
-    // All event fields should be string
-    assert!(ts_output.contains("buyer: string;"));
-    assert!(ts_output.contains("price: string;"));
+    // All event fields should be readonly string
+    assert!(ts_output.contains("readonly buyer: string;"));
+    assert!(ts_output.contains("readonly price: string;"));
 
     // TradeInfo is both emitted AND a param — gets Event suffix
     assert!(
@@ -360,7 +359,9 @@ fn generated_ts_compiles_with_tsc() {
 
     // Check if ts-check environment is set up
     if !ts_check_dir.join("node_modules").exists() {
-        eprintln!("Note: tests/ts-check/node_modules not found. Run `cd tests/ts-check && pnpm install` first. Skipping.");
+        eprintln!(
+            "Note: tests/ts-check/node_modules not found. Run `cd tests/ts-check && pnpm install` first. Skipping."
+        );
         return;
     }
 
@@ -371,7 +372,7 @@ fn generated_ts_compiles_with_tsc() {
     let config = CodegenConfig {
         package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
         project_name: "my_project".to_string(),
-            include_events: false,
+        include_events: false,
     };
 
     // Marketplace module
@@ -409,8 +410,7 @@ fn generated_ts_compiles_with_tsc() {
         project_name: "my_project".to_string(),
         include_events: true,
     };
-    let events_source =
-        fs::read_to_string("tests/fixtures/events.move").expect("fixture exists");
+    let events_source = fs::read_to_string("tests/fixtures/events.move").expect("fixture exists");
     let events_modules = parse_and_extract(&events_source);
     fs::write(
         generated_dir.join("marketplace_events.ts"),
