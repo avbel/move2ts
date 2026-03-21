@@ -1080,6 +1080,194 @@ mod tests {
         assert!(output.contains("export function reset(tx: Transaction): TransactionResult {"));
     }
 
+    // ---- Ref struct interface exclusion tests ----
+
+    #[test]
+    fn ref_struct_does_not_get_interface() {
+        // A key struct passed by &mut should NOT generate export interface
+        // because it maps to TransactionObjectInput (string object ID)
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "do_thing".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "store".to_string(),
+                    move_type: MoveType::Ref {
+                        inner: Box::new(MoveType::Struct {
+                            module: None,
+                            name: "Store".to_string(),
+                            type_args: vec![],
+                        }),
+                        is_mut: true,
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![StructInfo {
+                name: "Store".to_string(),
+                fields: vec![
+                    ("admin".to_string(), MoveType::Address),
+                    ("fee_bps".to_string(), MoveType::U64),
+                ],
+                has_key: true,
+                has_copy: false,
+                has_drop: false,
+            }],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            !output.contains("export interface Store"),
+            "key struct passed by ref should NOT get an interface"
+        );
+        assert!(
+            output.contains("store: TransactionObjectInput"),
+            "ref param should be TransactionObjectInput"
+        );
+    }
+
+    #[test]
+    fn singleton_ref_struct_does_not_get_interface() {
+        // A singleton key struct should NOT generate export interface
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "get_price".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "store".to_string(),
+                    move_type: MoveType::Ref {
+                        inner: Box::new(MoveType::Struct {
+                            module: None,
+                            name: "Store".to_string(),
+                            type_args: vec![],
+                        }),
+                        is_mut: false,
+                    },
+                    is_singleton: true,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![StructInfo {
+                name: "Store".to_string(),
+                fields: vec![("fee".to_string(), MoveType::U64)],
+                has_key: true,
+                has_copy: false,
+                has_drop: false,
+            }],
+            singletons: HashSet::from(["Store".to_string()]),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            !output.contains("export interface Store"),
+            "singleton key struct should NOT get an interface"
+        );
+        assert!(
+            output.contains("store?: TransactionObjectInput"),
+            "singleton param should be optional TransactionObjectInput"
+        );
+    }
+
+    #[test]
+    fn by_value_struct_gets_interface_but_ref_does_not() {
+        // Module with two structs: Config (copy+drop, by value) and Store (key, by ref)
+        // Only Config should get an interface
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "update".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![
+                    ParamInfo {
+                        name: "store".to_string(),
+                        move_type: MoveType::Ref {
+                            inner: Box::new(MoveType::Struct {
+                                module: None,
+                                name: "Store".to_string(),
+                                type_args: vec![],
+                            }),
+                            is_mut: true,
+                        },
+                        is_singleton: false,
+                    },
+                    ParamInfo {
+                        name: "config".to_string(),
+                        move_type: MoveType::Struct {
+                            module: None,
+                            name: "Config".to_string(),
+                            type_args: vec![],
+                        },
+                        is_singleton: false,
+                    },
+                ],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![
+                StructInfo {
+                    name: "Store".to_string(),
+                    fields: vec![("fee".to_string(), MoveType::U64)],
+                    has_key: true,
+                    has_copy: false,
+                    has_drop: false,
+                },
+                StructInfo {
+                    name: "Config".to_string(),
+                    fields: vec![
+                        ("max_items".to_string(), MoveType::U64),
+                        ("enabled".to_string(), MoveType::Bool),
+                    ],
+                    has_key: false,
+                    has_copy: true,
+                    has_drop: true,
+                },
+            ],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            !output.contains("export interface Store"),
+            "Store (key, by ref) should NOT get interface"
+        );
+        assert!(
+            output.contains("export interface Config {"),
+            "Config (copy+drop, by value) SHOULD get interface"
+        );
+        assert!(output.contains("maxItems: bigint;"));
+        assert!(output.contains("enabled: boolean;"));
+    }
+
     // ---- BCS serialization tests ----
 
     #[test]
