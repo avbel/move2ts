@@ -17,18 +17,28 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             npm_pkg: linux-x64
+            archive: tar.gz
+            suffix: linux-x64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             npm_pkg: linux-arm64
+            archive: tar.gz
+            suffix: linux-arm64
           - target: x86_64-apple-darwin
             os: macos-latest
             npm_pkg: darwin-x64
+            archive: zip
+            suffix: macos-x64
           - target: aarch64-apple-darwin
             os: macos-latest
             npm_pkg: darwin-arm64
+            archive: zip
+            suffix: macos-arm64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             npm_pkg: win32-x64
+            archive: zip
+            suffix: windows-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -59,10 +69,30 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../move2ts-${{ matrix.suffix }}.tar.gz move2ts
+        shell: bash
+
+      - name: Package (zip, Unix)
+        if: matrix.archive == 'zip' && runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          zip ../../../move2ts-${{ matrix.suffix }}.zip move2ts
+
+      - name: Package (zip, Windows)
+        if: matrix.archive == 'zip' && runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../move2ts-${{ matrix.suffix }}.zip move2ts.exe
+        shell: bash
+
       - uses: actions/upload-artifact@v4
         with:
-          name: move2ts-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/move2ts*
+          name: move2ts-${{ matrix.suffix }}
+          path: move2ts-${{ matrix.suffix }}.${{ matrix.archive }}
 
   release:
     needs: build
@@ -73,14 +103,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
 
       - name: Generate checksums
-        run: sha256sum move2ts-*/move2ts* > checksums-sha256.txt
+        run: sha256sum move2ts-*.* > checksums-sha256.txt
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            move2ts-*/move2ts*
+            move2ts-*.*
             checksums-sha256.txt
           generate_release_notes: true
 
@@ -93,6 +125,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
 
       - uses: pnpm/action-setup@v4
         with:
@@ -112,14 +146,14 @@ jobs:
             jq --arg v "$VERSION" '.version = $v' "$pkg" > tmp && mv tmp "$pkg"
           done
 
-      - name: Assemble platform binaries
+      - name: Extract and assemble platform binaries
         run: |
-          chmod +x move2ts-*/move2ts 2>/dev/null || true
-          cp move2ts-x86_64-unknown-linux-gnu/move2ts npm/linux-x64/
-          cp move2ts-aarch64-unknown-linux-gnu/move2ts npm/linux-arm64/
-          cp move2ts-x86_64-apple-darwin/move2ts npm/darwin-x64/
-          cp move2ts-aarch64-apple-darwin/move2ts npm/darwin-arm64/
-          cp move2ts-x86_64-pc-windows-msvc/move2ts.exe npm/win32-x64/
+          tar xzf move2ts-linux-x64.tar.gz -C npm/linux-x64/
+          tar xzf move2ts-linux-arm64.tar.gz -C npm/linux-arm64/
+          unzip -o move2ts-macos-x64.zip -d npm/darwin-x64/
+          unzip -o move2ts-macos-arm64.zip -d npm/darwin-arm64/
+          unzip -o move2ts-windows-x64.zip -d npm/win32-x64/
+          chmod +x npm/linux-x64/move2ts npm/linux-arm64/move2ts npm/darwin-x64/move2ts npm/darwin-arm64/move2ts
 
       - name: Publish platform packages then main package
         env:
