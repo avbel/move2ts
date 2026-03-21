@@ -18,4 +18,3 @@ move-core-types = { git = "https://github.com/MystenLabs/sui.git", rev = "a8b477
 
 [dev-dependencies]
 insta = "1"
-tempfile = "3"
