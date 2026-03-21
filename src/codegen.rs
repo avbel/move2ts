@@ -425,7 +425,12 @@ fn generate_function_wrapper(
     // Regular params
     for param in &func.params {
         let ts_param_name = to_camel_case(&param.name);
-        let ts_type = to_ts_type(&param.move_type);
+        let ts_type = if param.is_singleton {
+            // Singletons are always object IDs, regardless of struct abilities
+            "TransactionObjectInput".to_string()
+        } else {
+            to_ts_type(&param.move_type)
+        };
         let optional = if param.is_singleton { "?" } else { "" };
         arg_entries.push(format!("{ts_param_name}{optional}: {ts_type};"));
     }
@@ -458,11 +463,11 @@ fn generate_function_wrapper(
     for param in &func.params {
         let ts_param_name = to_camel_case(&param.name);
         let expr = if param.is_singleton {
-            // Resolve singleton with fallback to getter
+            // Singletons are always on-chain objects referenced by ID — use tx.object()
             let struct_name = param.move_type.struct_name().unwrap_or(&param.name);
             let getter_name = format!("get{struct_name}Id");
             let full_expr = format!("args.{ts_param_name} ?? {getter_name}()");
-            to_tx_encoding_with_context(&param.move_type, &full_expr, structs)
+            format!("tx.object({full_expr})")
         } else {
             let accessor = format!("args.{ts_param_name}");
             to_tx_encoding_with_context(&param.move_type, &accessor, structs)

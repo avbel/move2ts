@@ -2,6 +2,7 @@
   "private": true,
   "devDependencies": {
     "typescript": "^5",
-    "@mysten/sui": "^2.9"
+    "@mysten/sui": "^2.9",
+    "@mysten/bcs": "^2"
   }
 }

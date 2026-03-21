@@ -132,6 +132,145 @@ fn full_pipeline_defi_generics() {
 }
 
 #[test]
+fn full_pipeline_pure_structs() {
+    let source =
+        fs::read_to_string("tests/fixtures/pure_structs.move").expect("fixture exists");
+    let modules = parse_and_extract(&source);
+
+    assert_eq!(modules.len(), 1);
+    let module = &modules[0];
+    assert_eq!(module.name, "config");
+
+    // Registry should be singleton (only constructed in init)
+    assert!(
+        module.singletons.contains("Registry"),
+        "Registry should be a singleton, got: {:?}",
+        module.singletons
+    );
+
+    // Config should NOT be singleton (copy+drop, no key — not an on-chain object)
+    assert!(
+        !module.singletons.contains("Config"),
+        "Config should not be a singleton (pure value struct), got: {:?}",
+        module.singletons
+    );
+
+    // Config struct should have copy+drop but no key
+    let config_struct = module
+        .structs
+        .iter()
+        .find(|s| s.name == "Config")
+        .expect("Config struct exists");
+    assert!(config_struct.has_copy);
+    assert!(config_struct.has_drop);
+    assert!(!config_struct.has_key);
+    assert!(config_struct.is_pure_value());
+
+    // Metadata struct should also be copy+drop
+    let metadata_struct = module
+        .structs
+        .iter()
+        .find(|s| s.name == "Metadata")
+        .expect("Metadata struct exists");
+    assert!(metadata_struct.has_copy);
+    assert!(metadata_struct.has_drop);
+    assert!(metadata_struct.is_pure_value());
+
+    // Registry struct should have key (object)
+    let registry_struct = module
+        .structs
+        .iter()
+        .find(|s| s.name == "Registry")
+        .expect("Registry struct exists");
+    assert!(registry_struct.has_key);
+    assert!(!registry_struct.is_pure_value());
+
+    // update_config takes Config by value — should use BCS
+    let update_config = module
+        .functions
+        .iter()
+        .find(|f| f.name == "update_config")
+        .expect("update_config exists");
+    let config_param = update_config
+        .params
+        .iter()
+        .find(|p| p.name == "new_config")
+        .expect("new_config param exists");
+    // Should be a Struct, not a Ref (passed by value)
+    assert!(
+        matches!(&config_param.move_type, move2ts::ir::MoveType::Struct { name, .. } if name == "Config"),
+        "new_config should be MoveType::Struct, got: {:?}",
+        config_param.move_type
+    );
+
+    // set_metadata should have clock auto-injected
+    let set_metadata = module
+        .functions
+        .iter()
+        .find(|f| f.name == "set_metadata")
+        .expect("set_metadata exists");
+    assert!(set_metadata.has_clock_param);
+
+    // Generate TS and verify BCS usage
+    let codegen_config = CodegenConfig {
+        package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+        project_name: "my_project".to_string(),
+    };
+    let ts_output = generate_module(module, &codegen_config);
+
+    // Should import bcs (pure value structs are used)
+    assert!(
+        ts_output.contains("import { bcs } from '@mysten/bcs'"),
+        "should import bcs for pure value structs"
+    );
+
+    // update_config should use BCS serialization for Config param
+    assert!(
+        ts_output.contains("bcs.struct('Config'"),
+        "should use bcs.struct for Config"
+    );
+
+    // Config BCS schema should include the correct field types
+    assert!(
+        ts_output.contains("bcs.u64()"),
+        "Config schema should have u64 for max_items"
+    );
+    assert!(
+        ts_output.contains("bcs.u16()"),
+        "Config schema should have u16 for fee_bps"
+    );
+    assert!(
+        ts_output.contains("bcs.bool()"),
+        "Config schema should have bool for enabled"
+    );
+
+    // set_metadata should use BCS for Metadata param
+    assert!(
+        ts_output.contains("bcs.struct('Metadata'"),
+        "should use bcs.struct for Metadata"
+    );
+
+    // Registry should still use tx.object (it has key)
+    assert!(
+        ts_output.contains("tx.object("),
+        "Registry should use tx.object"
+    );
+
+    // Clock should be auto-injected in set_metadata
+    assert!(ts_output.contains("tx.object.clock()"));
+
+    // Registry should be singleton (optional param with TransactionObjectInput)
+    assert!(ts_output.contains("registry?: TransactionObjectInput"));
+
+    // Config param in update_config should use BCS (not singleton, pure value)
+    // It should have the struct type, not TransactionObjectInput
+    assert!(
+        ts_output.contains("newConfig: Config;"),
+        "Config param should use the Config interface type for BCS serialization"
+    );
+}
+
+#[test]
 fn errors_module_generates_valid_content() {
     let output = generate_errors_module();
     assert!(output.contains("export class Move2TsConfigError extends Error"));
@@ -181,6 +320,16 @@ fn generated_ts_compiles_with_tsc() {
         generate_module(&defi_modules[0], &config),
     )
     .expect("write defi.ts");
+
+    // Pure structs module (copy+drop structs with BCS serialization)
+    let pure_source =
+        fs::read_to_string("tests/fixtures/pure_structs.move").expect("fixture exists");
+    let pure_modules = parse_and_extract(&pure_source);
+    fs::write(
+        generated_dir.join("config.ts"),
+        generate_module(&pure_modules[0], &config),
+    )
+    .expect("write config.ts");
 
     // Shared errors module
     fs::write(

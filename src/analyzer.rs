@@ -419,13 +419,24 @@ fn build_constructor_map(module_def: &ModuleDefinition) -> HashMap<String, HashS
     constructor_map
 }
 
-/// Detects singletons: structs only constructed in `init()`.
-fn detect_singletons(constructor_map: &HashMap<String, HashSet<String>>) -> HashSet<String> {
+/// Detects singletons: structs only constructed in `init()` that are on-chain objects (have `key`).
+/// Pure value structs (copy+drop, no key) are excluded — they cannot be on-chain singletons.
+fn detect_singletons(
+    constructor_map: &HashMap<String, HashSet<String>>,
+    structs: &[StructInfo],
+) -> HashSet<String> {
     let mut singletons = HashSet::new();
 
     for (struct_name, constructing_fns) in constructor_map {
         if constructing_fns.len() == 1 && constructing_fns.contains("init") {
-            singletons.insert(struct_name.clone());
+            // Only key-bearing structs can be on-chain singletons
+            let is_object = structs
+                .iter()
+                .find(|s| s.name == *struct_name)
+                .is_some_and(|s| s.has_key);
+            if is_object {
+                singletons.insert(struct_name.clone());
+            }
         }
     }
 
@@ -436,12 +447,12 @@ fn detect_singletons(constructor_map: &HashMap<String, HashSet<String>>) -> Hash
 pub fn extract_module(module_def: &ModuleDefinition) -> ModuleInfo {
     let module_name = module_def.name.0.value.as_str().to_string();
 
-    // Build constructor map and detect singletons
-    let constructor_map = build_constructor_map(module_def);
-    let singletons = detect_singletons(&constructor_map);
-
-    // Extract structs
+    // Extract structs first (needed for singleton detection)
     let structs = extract_structs(module_def);
+
+    // Build constructor map and detect singletons (only key-bearing structs)
+    let constructor_map = build_constructor_map(module_def);
+    let singletons = detect_singletons(&constructor_map, &structs);
 
     // Extract functions
     let functions = extract_functions(module_def, &singletons);
