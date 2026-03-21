@@ -5,7 +5,9 @@ use anyhow::{Context, Result, bail};
 
 use crate::analyzer::{extract_modules, filter_functions};
 use crate::cli::Cli;
-use crate::codegen::{CodegenConfig, generate_errors_module, generate_module, to_env_var_name};
+use crate::codegen::{
+    CodegenConfig, generate_errors_module, generate_module, to_env_var_name, validate_identifier,
+};
 use crate::parser::MoveParser;
 
 /// Main pipeline: parse Move files, extract IR, generate TypeScript.
@@ -124,6 +126,14 @@ pub fn run(cli: &Cli) -> Result<()> {
                 module.name
             );
             continue;
+        }
+
+        // Validate identifiers to prevent code injection in generated TS
+        validate_identifier(&module.name)
+            .with_context(|| format!("invalid module name: '{}'", module.name))?;
+        for func in &module.functions {
+            validate_identifier(&func.name)
+                .with_context(|| format!("invalid function name: '{}'", func.name))?;
         }
 
         let config = CodegenConfig {

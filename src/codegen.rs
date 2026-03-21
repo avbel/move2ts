@@ -130,6 +130,23 @@ fn to_bcs_type_string(ty: &MoveType) -> String {
     }
 }
 
+/// Validates that a name is a safe identifier (alphanumeric + underscores only).
+/// Prevents code injection via malicious module/function/struct names.
+pub fn validate_identifier(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("identifier must not be empty");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        anyhow::bail!(
+            "identifier '{name}' contains unsafe characters (only alphanumeric and _ allowed)"
+        );
+    }
+    Ok(())
+}
+
 /// Converts a Move snake_case name to TypeScript camelCase.
 pub fn to_camel_case(name: &str) -> String {
     name.to_case(Case::Camel)
