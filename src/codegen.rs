@@ -424,8 +424,9 @@ fn collect_struct_refs_from_type(
     referenced: &mut HashSet<String>,
 ) {
     match ty {
-        MoveType::Ref { inner, .. } => {
-            collect_struct_refs_from_type(inner, struct_names, referenced);
+        MoveType::Ref { .. } => {
+            // Ref types map to TransactionObjectInput (string object ID),
+            // not to the struct interface. Don't collect them.
         }
         MoveType::Struct {
             name, type_args, ..
@@ -978,14 +979,11 @@ mod tests {
                 is_entry: true,
                 type_params: vec![],
                 params: vec![ParamInfo {
-                    name: "listing".to_string(),
-                    move_type: MoveType::Ref {
-                        inner: Box::new(MoveType::Struct {
-                            module: None,
-                            name: "Listing".to_string(),
-                            type_args: vec![],
-                        }),
-                        is_mut: true,
+                    name: "data".to_string(),
+                    move_type: MoveType::Struct {
+                        module: None,
+                        name: "ListingData".to_string(),
+                        type_args: vec![],
                     },
                     is_singleton: false,
                 }],
@@ -993,15 +991,14 @@ mod tests {
                 has_random_param: false,
             }],
             structs: vec![StructInfo {
-                name: "Listing".to_string(),
+                name: "ListingData".to_string(),
                 fields: vec![
-                    ("id".to_string(), MoveType::ObjectId),
                     ("price".to_string(), MoveType::U64),
                     ("seller".to_string(), MoveType::Address),
                 ],
-                has_key: true,
-                has_copy: false,
-                has_drop: false,
+                has_key: false,
+                has_copy: true,
+                has_drop: true,
             }],
             singletons: HashSet::new(),
             emitted_events: HashSet::new(),
@@ -1014,8 +1011,7 @@ mod tests {
         };
 
         let output = generate_module(&module, &config);
-        assert!(output.contains("export interface Listing {"));
-        assert!(output.contains("id: string;"));
+        assert!(output.contains("export interface ListingData {"));
         assert!(output.contains("price: bigint;"));
         assert!(output.contains("seller: string;"));
     }
