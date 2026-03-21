@@ -216,7 +216,7 @@ export type ItemPurchased = {
   readonly buyer: string;
   readonly seller: string;
   readonly price: string;
-  readonly itemId: string;
+  readonly item_id: string;
 };
 ```
 
