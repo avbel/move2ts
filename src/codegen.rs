@@ -281,20 +281,10 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     }
     w.blank();
 
-    // --- Event types (only when --events is enabled, placed after imports) ---
+    // --- Event types (after imports) ---
     let referenced_structs = collect_referenced_structs(module);
     if config.include_events {
         generate_event_types(&mut w, module, &referenced_structs);
-    }
-
-    // --- Package ID lazy getter ---
-    generate_package_id_getter(&mut w, &config.package_id_env_var);
-    w.blank();
-
-    // --- Singleton lazy getters ---
-    for singleton_name in &module.singletons {
-        generate_singleton_getter(&mut w, &config.project_name, singleton_name);
-        w.blank();
     }
 
     // --- Struct interfaces (only for structs referenced in function params) ---
@@ -305,9 +295,18 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
         }
     }
 
-    // --- Function wrappers ---
+    // --- Exported function wrappers ---
     for func in &module.functions {
         generate_function_wrapper(&mut w, func, &module.name, &module.structs);
+        w.blank();
+    }
+
+    // --- Internal helpers (package ID + singleton getters) ---
+    generate_package_id_getter(&mut w, &config.package_id_env_var);
+    w.blank();
+
+    for singleton_name in &module.singletons {
+        generate_singleton_getter(&mut w, &config.project_name, singleton_name);
         w.blank();
     }
 
