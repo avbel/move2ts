@@ -269,34 +269,45 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
 
     // --- Event types (only when --events is enabled) ---
     if config.include_events {
-        generate_event_types(&mut w, module, &referenced_structs);
+        generate_event_types(&mut w, module);
     }
 
     w.into_string()
 }
 
 /// Generates `export type` declarations for event structs.
-/// Events are copy+drop structs NOT used as function parameters.
+/// Only structs that are actually emitted via `event::emit()` are included.
 /// All fields are typed as `string` (event data from RPC/indexers is string-serialized).
-fn generate_event_types(
-    w: &mut CodeWriter,
-    module: &ModuleInfo,
-    referenced_structs: &HashSet<String>,
-) {
+/// If a struct is both emitted AND used as a function param, the event type gets an `Event` suffix
+/// (the param version already has an `export interface` with proper Move type mapping).
+fn generate_event_types(w: &mut CodeWriter, module: &ModuleInfo) {
     let events: Vec<&StructInfo> = module
         .structs
         .iter()
-        .filter(|s| s.is_pure_value() && !referenced_structs.contains(&s.name))
+        .filter(|s| module.emitted_events.contains(&s.name))
         .collect();
 
     if events.is_empty() {
         return;
     }
 
+    let referenced = collect_referenced_structs(module);
+
     w.line("// --- Event Types ---");
     w.blank();
     for event in events {
-        w.line(&format!("export type {} = {{", event.name));
+        // If also used as a function param, add "Event" suffix to avoid name collision
+        // But don't double-suffix names already ending in "Event" (avoid "SomeEventEvent")
+        let type_name = if referenced.contains(&event.name) {
+            if event.name.ends_with("Event") {
+                event.name.clone()
+            } else {
+                format!("{}Event", event.name)
+            }
+        } else {
+            event.name.clone()
+        };
+        w.line(&format!("export type {type_name} = {{"));
         w.indent();
         for (field_name, _) in &event.fields {
             w.line(&format!("{}: string;", to_camel_case(field_name)));
@@ -817,6 +828,7 @@ mod tests {
             }],
             structs: vec![],
             singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
         };
 
         let config = CodegenConfig {
@@ -862,6 +874,7 @@ mod tests {
             }],
             structs: vec![],
             singletons: HashSet::from(["Marketplace".to_string()]),
+            emitted_events: HashSet::new(),
         };
 
         let config = CodegenConfig {
@@ -909,6 +922,7 @@ mod tests {
             }],
             structs: vec![],
             singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
         };
 
         let config = CodegenConfig {
@@ -947,6 +961,7 @@ mod tests {
             }],
             structs: vec![],
             singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
         };
 
         let config = CodegenConfig {
@@ -994,6 +1009,7 @@ mod tests {
                 has_drop: false,
             }],
             singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
         };
 
         let config = CodegenConfig {
@@ -1033,6 +1049,7 @@ mod tests {
                 has_drop: false,
             }],
             singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
         };
 
         let config = CodegenConfig {
@@ -1059,6 +1076,7 @@ mod tests {
             }],
             structs: vec![],
             singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
         };
 
         let config = CodegenConfig {
@@ -1206,6 +1224,7 @@ mod tests {
                 has_drop: true,
             }],
             singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
         };
 
         let config = CodegenConfig {
@@ -1251,6 +1270,7 @@ mod tests {
                 has_drop: false,
             }],
             singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
         };
 
         let config = CodegenConfig {
@@ -1284,6 +1304,7 @@ mod tests {
                 },
             ],
             singletons: HashSet::new(),
+            emitted_events: HashSet::from(["ItemPurchased".to_string()]),
         };
 
         let config = CodegenConfig {
@@ -1317,6 +1338,7 @@ mod tests {
                 },
             ],
             singletons: HashSet::new(),
+            emitted_events: HashSet::from(["ItemPurchased".to_string()]),
         };
 
         let config = CodegenConfig {
@@ -1331,7 +1353,7 @@ mod tests {
     }
 
     #[test]
-    fn event_excludes_structs_used_as_params() {
+    fn event_not_emitted_is_excluded() {
         let module = ModuleInfo {
             name: "marketplace".to_string(),
             functions: vec![FunctionInfo {
@@ -1351,23 +1373,19 @@ mod tests {
                 has_random_param: false,
             }],
             structs: vec![
-                // PriceRange is used as a function param — should NOT be an event
                 StructInfo {
                     name: "PriceRange".to_string(),
                     fields: vec![
                         ("min_price".to_string(), MoveType::U64),
-                        ("max_price".to_string(), MoveType::U64),
                     ],
                     has_key: false,
                     has_copy: true,
                     has_drop: true,
                 },
-                // ItemPurchased is NOT used as a param — IS an event
                 StructInfo {
                     name: "ItemPurchased".to_string(),
                     fields: vec![
                         ("buyer".to_string(), MoveType::Address),
-                        ("price".to_string(), MoveType::U64),
                     ],
                     has_key: false,
                     has_copy: true,
@@ -1375,6 +1393,8 @@ mod tests {
                 },
             ],
             singletons: HashSet::new(),
+            // Only ItemPurchased is emitted — PriceRange is NOT
+            emitted_events: HashSet::from(["ItemPurchased".to_string()]),
         };
 
         let config = CodegenConfig {
@@ -1384,16 +1404,67 @@ mod tests {
         };
 
         let output = generate_module(&module, &config);
-        // ItemPurchased should appear as event type
         assert!(output.contains("export type ItemPurchased = {"));
-        // PriceRange should NOT appear as event type (it's a function param)
+        // PriceRange is not emitted, so no event type for it
         assert!(!output.contains("export type PriceRange"));
-        // PriceRange should appear as BCS interface instead
-        assert!(output.contains("export interface PriceRange {"));
     }
 
     #[test]
-    fn event_excludes_key_structs() {
+    fn event_used_as_param_gets_suffix() {
+        // A struct that is BOTH emitted AND used as a function param
+        // gets an "Event" suffix on the event type to avoid collision
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "replay_event".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "event_data".to_string(),
+                    move_type: MoveType::Struct {
+                        module: None,
+                        name: "TradeExecuted".to_string(),
+                        type_args: vec![],
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![
+                StructInfo {
+                    name: "TradeExecuted".to_string(),
+                    fields: vec![
+                        ("buyer".to_string(), MoveType::Address),
+                        ("amount".to_string(), MoveType::U64),
+                    ],
+                    has_key: false,
+                    has_copy: true,
+                    has_drop: true,
+                },
+            ],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::from(["TradeExecuted".to_string()]),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: true,
+        };
+
+        let output = generate_module(&module, &config);
+        // Should have BCS interface (for function param)
+        assert!(output.contains("export interface TradeExecuted {"));
+        // Should have event type WITH Event suffix (for event consumption)
+        assert!(output.contains("export type TradeExecutedEvent = {"));
+        // Event fields should all be string
+        assert!(output.contains("buyer: string;"));
+        assert!(output.contains("amount: string;"));
+    }
+
+    #[test]
+    fn event_excludes_non_emitted_structs() {
         let module = ModuleInfo {
             name: "marketplace".to_string(),
             functions: vec![],
@@ -1407,6 +1478,7 @@ mod tests {
                 },
             ],
             singletons: HashSet::new(),
+            emitted_events: HashSet::new(), // nothing emitted
         };
 
         let config = CodegenConfig {
@@ -1418,5 +1490,49 @@ mod tests {
         let output = generate_module(&module, &config);
         assert!(!output.contains("export type Marketplace"));
         assert!(!output.contains("Event Types"));
+    }
+
+    #[test]
+    fn event_suffix_not_doubled() {
+        // If struct name already ends with "Event", don't add another "Event"
+        let module = ModuleInfo {
+            name: "trading".to_string(),
+            functions: vec![FunctionInfo {
+                name: "process".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "data".to_string(),
+                    move_type: MoveType::Struct {
+                        module: None,
+                        name: "TradeEvent".to_string(),
+                        type_args: vec![],
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![StructInfo {
+                name: "TradeEvent".to_string(),
+                fields: vec![("amount".to_string(), MoveType::U64)],
+                has_key: false,
+                has_copy: true,
+                has_drop: true,
+            }],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::from(["TradeEvent".to_string()]),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: true,
+        };
+
+        let output = generate_module(&module, &config);
+        // Should be "TradeEvent", NOT "TradeEventEvent"
+        assert!(output.contains("export type TradeEvent = {"));
+        assert!(!output.contains("TradeEventEvent"));
     }
 }

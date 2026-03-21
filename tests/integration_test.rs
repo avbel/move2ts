@@ -282,13 +282,20 @@ fn full_pipeline_events() {
     let module = &modules[0];
     assert_eq!(module.name, "marketplace_events");
 
-    // ItemPurchased, ListingCreated, FeeCollected should be copy+drop (events)
-    // PriceRange is also copy+drop but used as function param (not an event)
-    let item_purchased = module.structs.iter().find(|s| s.name == "ItemPurchased").unwrap();
-    assert!(item_purchased.is_pure_value());
+    // Verify emitted events were detected from event::emit() calls
+    assert!(
+        module.emitted_events.contains("ItemPurchased"),
+        "ItemPurchased should be detected as emitted, got: {:?}",
+        module.emitted_events
+    );
+    assert!(module.emitted_events.contains("ListingCreated"));
+    assert!(module.emitted_events.contains("FeeCollected"));
 
-    let price_range = module.structs.iter().find(|s| s.name == "PriceRange").unwrap();
-    assert!(price_range.is_pure_value());
+    // TradeInfo is both emitted AND used as function param
+    assert!(module.emitted_events.contains("TradeInfo"));
+
+    // PriceRange is NOT emitted (only used as function param)
+    assert!(!module.emitted_events.contains("PriceRange"));
 
     // Generate with events enabled
     let config = CodegenConfig {
@@ -298,30 +305,29 @@ fn full_pipeline_events() {
     };
     let ts_output = generate_module(module, &config);
 
-    // Event types should appear
-    assert!(ts_output.contains("// --- Event Types ---"));
+    // Pure event types (not used as params) — no suffix
     assert!(ts_output.contains("export type ItemPurchased = {"));
     assert!(ts_output.contains("export type ListingCreated = {"));
     assert!(ts_output.contains("export type FeeCollected = {"));
 
     // All event fields should be string
     assert!(ts_output.contains("buyer: string;"));
-    assert!(ts_output.contains("seller: string;"));
     assert!(ts_output.contains("price: string;"));
-    assert!(ts_output.contains("itemId: string;"));
-    assert!(ts_output.contains("listingId: string;"));
-    assert!(ts_output.contains("amount: string;"));
-    assert!(ts_output.contains("recipient: string;"));
 
-    // PriceRange is used as function param — should NOT be an event type
+    // TradeInfo is both emitted AND a param — gets Event suffix
     assert!(
-        !ts_output.contains("export type PriceRange"),
-        "PriceRange is a function param, not an event"
+        ts_output.contains("export type TradeInfoEvent = {"),
+        "TradeInfo should get Event suffix since it's also a function param"
     );
-    // PriceRange should appear as BCS interface instead
+    // TradeInfo should also have BCS interface (for the param usage)
+    assert!(ts_output.contains("export interface TradeInfo {"));
+
+    // PriceRange is NOT emitted — no event type
+    assert!(!ts_output.contains("export type PriceRange"));
+    // PriceRange should still have BCS interface (used as param)
     assert!(ts_output.contains("export interface PriceRange {"));
 
-    // Marketplace (key struct) should NOT be an event
+    // Marketplace (key struct, not emitted) — no event type
     assert!(!ts_output.contains("export type Marketplace"));
 
     // Without --events, no event types

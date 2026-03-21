@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use move_compiler::parser::ast::{
     Ability_, Definition, Exp, Exp_, FunctionBody_, ModuleDefinition, ModuleMember,
-    NameAccessChain_, Sequence, SequenceItem_, StructFields, Type, Type_, Visibility,
+    NameAccessChain, NameAccessChain_, Sequence, SequenceItem_, StructFields, Type, Type_,
+    Visibility,
 };
 
 pub use crate::ir::*;
@@ -443,6 +444,169 @@ fn detect_singletons(
     singletons
 }
 
+/// Detects event structs by scanning function bodies for `event::emit()` / `emit()` calls.
+/// Returns the set of struct names that are emitted as events.
+fn detect_emitted_events(module_def: &ModuleDefinition) -> HashSet<String> {
+    let mut emitted = HashSet::new();
+
+    for member in &module_def.members {
+        if let ModuleMember::Function(func) = member
+            && let FunctionBody_::Defined(seq) = &func.body.value {
+                collect_emit_calls_from_sequence(seq, &mut emitted);
+            }
+    }
+
+    emitted
+}
+
+/// Recursively walks expressions looking for `event::emit(StructName { ... })` calls.
+fn collect_emit_calls_from_exp(exp: &Exp, emitted: &mut HashSet<String>) {
+    match &exp.value {
+        Exp_::Call(chain, args) => {
+            if is_emit_call(chain) {
+                // The argument to emit() is typically a Pack (struct constructor)
+                for arg in &args.value {
+                    collect_emitted_struct_name(arg, emitted);
+                }
+            }
+            // Also recurse into args for nested calls
+            for arg in &args.value {
+                collect_emit_calls_from_exp(arg, emitted);
+            }
+        }
+        Exp_::Pack(_chain, fields) => {
+            for (_field, field_exp) in fields {
+                collect_emit_calls_from_exp(field_exp, emitted);
+            }
+        }
+        Exp_::Block(seq) => {
+            collect_emit_calls_from_sequence(seq, emitted);
+        }
+        Exp_::IfElse(cond, then_exp, else_exp) => {
+            collect_emit_calls_from_exp(cond, emitted);
+            collect_emit_calls_from_exp(then_exp, emitted);
+            if let Some(else_e) = else_exp {
+                collect_emit_calls_from_exp(else_e, emitted);
+            }
+        }
+        Exp_::While(cond, body) => {
+            collect_emit_calls_from_exp(cond, emitted);
+            collect_emit_calls_from_exp(body, emitted);
+        }
+        Exp_::Loop(body) => {
+            collect_emit_calls_from_exp(body, emitted);
+        }
+        Exp_::Labeled(_, inner) => {
+            collect_emit_calls_from_exp(inner, emitted);
+        }
+        Exp_::Assign(lhs, rhs) => {
+            collect_emit_calls_from_exp(lhs, emitted);
+            collect_emit_calls_from_exp(rhs, emitted);
+        }
+        Exp_::DotCall(inner, _, _, _, _, args) => {
+            collect_emit_calls_from_exp(inner, emitted);
+            for arg in &args.value {
+                collect_emit_calls_from_exp(arg, emitted);
+            }
+        }
+        Exp_::Lambda(_, _, body) => {
+            collect_emit_calls_from_exp(body, emitted);
+        }
+        Exp_::ExpList(exps) => {
+            for e in exps {
+                collect_emit_calls_from_exp(e, emitted);
+            }
+        }
+        Exp_::Return(_, Some(inner))
+        | Exp_::Abort(Some(inner))
+        | Exp_::Dereference(inner)
+        | Exp_::UnaryExp(_, inner)
+        | Exp_::Borrow(_, inner)
+        | Exp_::Dot(inner, _, _)
+        | Exp_::Cast(inner, _)
+        | Exp_::Annotate(inner, _)
+        | Exp_::Move(_, inner)
+        | Exp_::Copy(_, inner) => {
+            collect_emit_calls_from_exp(inner, emitted);
+        }
+        Exp_::BinopExp(lhs, _, rhs) => {
+            collect_emit_calls_from_exp(lhs, emitted);
+            collect_emit_calls_from_exp(rhs, emitted);
+        }
+        Exp_::Match(scrutinee, arms) => {
+            collect_emit_calls_from_exp(scrutinee, emitted);
+            for arm in &arms.value {
+                collect_emit_calls_from_exp(&arm.value.rhs, emitted);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walks a sequence (block body) for emit calls.
+fn collect_emit_calls_from_sequence(seq: &Sequence, emitted: &mut HashSet<String>) {
+    for item in &seq.1 {
+        match &item.value {
+            SequenceItem_::Seq(exp) => collect_emit_calls_from_exp(exp, emitted),
+            SequenceItem_::Bind(_, _, exp) => collect_emit_calls_from_exp(exp, emitted),
+            SequenceItem_::Declare(_, _) => {}
+        }
+    }
+    if let Some(trailing_exp) = seq.3.as_ref() {
+        collect_emit_calls_from_exp(trailing_exp, emitted);
+    }
+}
+
+/// Checks if a NameAccessChain refers to `emit` / `event::emit` / `sui::event::emit`.
+fn is_emit_call(chain: &NameAccessChain) -> bool {
+    match &chain.value {
+        NameAccessChain_::Single(entry) => entry.name.value.as_str() == "emit",
+        NameAccessChain_::Path(path) => {
+            // Check last entry is "emit"
+            if let Some(last) = path.entries.last()
+                && last.name.value.as_str() == "emit" {
+                    // Optionally verify the path includes "event"
+                    return true;
+                }
+            false
+        }
+    }
+}
+
+/// Extracts the struct name from an emit() argument.
+/// Handles: emit(MyStruct { ... }) and emit(variable) where variable was packed.
+fn collect_emitted_struct_name(exp: &Exp, emitted: &mut HashSet<String>) {
+    match &exp.value {
+        Exp_::Pack(chain, _) => {
+            if let Some(name) = extract_name_from_chain(chain) {
+                emitted.insert(name);
+            }
+        }
+        Exp_::Name(_chain) => {
+            // Variable — could be a struct constructed earlier, but we can't track that
+            // without dataflow analysis. Skip for now.
+        }
+        Exp_::Block(seq) => {
+            // The emit arg might be a block that ends with a Pack
+            if let Some(trailing) = seq.3.as_ref() {
+                collect_emitted_struct_name(trailing, emitted);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extracts a simple name from a NameAccessChain (the last component).
+fn extract_name_from_chain(chain: &NameAccessChain) -> Option<String> {
+    match &chain.value {
+        NameAccessChain_::Single(entry) => Some(entry.name.value.as_str().to_string()),
+        NameAccessChain_::Path(path) => path
+            .entries
+            .last()
+            .map(|e| e.name.value.as_str().to_string()),
+    }
+}
+
 /// Extracts a `ModuleInfo` from a parsed `ModuleDefinition`.
 pub fn extract_module(module_def: &ModuleDefinition) -> ModuleInfo {
     let module_name = module_def.name.0.value.as_str().to_string();
@@ -454,6 +618,9 @@ pub fn extract_module(module_def: &ModuleDefinition) -> ModuleInfo {
     let constructor_map = build_constructor_map(module_def);
     let singletons = detect_singletons(&constructor_map, &structs);
 
+    // Detect emitted events by scanning for event::emit() calls
+    let emitted_events = detect_emitted_events(module_def);
+
     // Extract functions
     let functions = extract_functions(module_def, &singletons);
 
@@ -462,6 +629,7 @@ pub fn extract_module(module_def: &ModuleDefinition) -> ModuleInfo {
         functions,
         structs,
         singletons,
+        emitted_events,
     }
 }
 

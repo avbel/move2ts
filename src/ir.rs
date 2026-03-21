@@ -86,6 +86,7 @@ pub struct ModuleInfo {
     pub functions: Vec<FunctionInfo>,
     pub structs: Vec<StructInfo>,
     pub singletons: HashSet<String>,
+    pub emitted_events: HashSet<String>,
 }
 
 #[derive(Debug, Clone)]
