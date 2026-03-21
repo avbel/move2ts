@@ -9,6 +9,9 @@
   "cpu": [
     "arm64"
   ],
+  "scripts": {
+    "postinstall": "node -e \"require('fs').chmodSync(require('path').join(__dirname,'move2ts'),0o755)\""
+  },
   "publishConfig": {
     "access": "public"
   },
