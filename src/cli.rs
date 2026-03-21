@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(
     name = "move2ts",
     about = "Generate TypeScript wrappers from Sui Move source files",
-    version
+    version = env!("MOVE2TS_VERSION")
 )]
 pub struct Cli {
     /// .move file or package directory (with Move.toml)

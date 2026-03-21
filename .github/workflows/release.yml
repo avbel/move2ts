@@ -12,6 +12,7 @@ jobs:
     permissions: {}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      MOVE2TS_VERSION: ${{ github.ref_name }}
     strategy:
       fail-fast: false
       matrix:

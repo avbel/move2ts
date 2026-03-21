@@ -16,6 +16,7 @@ Generate type-safe TypeScript wrappers for Sui Move smart contracts.
 - All generated functions return `TransactionResult` for composability in Programmable Transaction Blocks
 - Uses the SDK's `TransactionObjectInput` for all object parameters
 - Supports generic type parameters
+- Skips abort-only functions (deprecated stubs like `abort E_DEPRECATED`)
 - CLI filtering: `--methods`, `--skip-methods`
 - Portable generated code: works with Node.js, Deno, Bun
 
