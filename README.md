@@ -119,28 +119,6 @@ import { Transaction } from '@mysten/sui/transactions';
 import { isValidSuiAddress } from '@mysten/sui/utils';
 import { InvalidConfigError } from './move2ts-errors';
 
-function getPackageId(): string {
-  const id = process.env.MY_PROJECT_PACKAGE_ID;
-  if (!id) {
-    throw new InvalidConfigError('MY_PROJECT_PACKAGE_ID environment variable is not set');
-  }
-  if (!isValidSuiAddress(id)) {
-    throw new InvalidConfigError(`MY_PROJECT_PACKAGE_ID is not a valid Sui address: ${id}`);
-  }
-  return id;
-}
-
-function getMarketplaceId(): string {
-  const id = process.env.MY_PROJECT_MARKETPLACE_ID;
-  if (!id) {
-    throw new InvalidConfigError('MY_PROJECT_MARKETPLACE_ID environment variable is not set');
-  }
-  if (!isValidSuiAddress(id)) {
-    throw new InvalidConfigError(`MY_PROJECT_MARKETPLACE_ID is not a valid Sui address: ${id}`);
-  }
-  return id;
-}
-
 // Entry function -- singleton resolved lazily
 export function listItem(
   tx: Transaction,
@@ -191,6 +169,30 @@ export function getTimedPrice(
       tx.object.clock(),
     ],
   });
+}
+
+// --- Internal helpers (not exported) ---
+
+function getPackageId(): string {
+  const id = process.env.MY_PROJECT_PACKAGE_ID;
+  if (!id) {
+    throw new InvalidConfigError('MY_PROJECT_PACKAGE_ID environment variable is not set');
+  }
+  if (!isValidSuiAddress(id)) {
+    throw new InvalidConfigError(`MY_PROJECT_PACKAGE_ID is not a valid Sui address: ${id}`);
+  }
+  return id;
+}
+
+function getMarketplaceId(): string {
+  const id = process.env.MY_PROJECT_MARKETPLACE_ID;
+  if (!id) {
+    throw new InvalidConfigError('MY_PROJECT_MARKETPLACE_ID environment variable is not set');
+  }
+  if (!isValidSuiAddress(id)) {
+    throw new InvalidConfigError(`MY_PROJECT_MARKETPLACE_ID is not a valid Sui address: ${id}`);
+  }
+  return id;
 }
 ```
 
