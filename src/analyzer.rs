@@ -593,16 +593,18 @@ fn is_abort_only_body(body: &move_compiler::parser::ast::FunctionBody) -> bool {
 
     // Case: `{ abort N }` — no items, trailing is Abort
     if items.is_empty() {
-        if let Some(exp) = trailing.as_ref() {
-            return matches!(&exp.value, Exp_::Abort(_));
-        }
+        return trailing
+            .as_ref()
+            .as_ref()
+            .is_some_and(|exp| matches!(&exp.value, Exp_::Abort(_)));
     }
 
     // Case: `{ abort N; }` — single Seq item is Abort
-    if items.len() == 1 && trailing.is_none() {
-        if let SequenceItem_::Seq(exp) = &items[0].value {
-            return matches!(&exp.value, Exp_::Abort(_));
-        }
+    if items.len() == 1
+        && trailing.is_none()
+        && let SequenceItem_::Seq(exp) = &items[0].value
+    {
+        return matches!(&exp.value, Exp_::Abort(_));
     }
 
     false
