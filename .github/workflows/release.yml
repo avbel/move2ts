@@ -149,7 +149,7 @@ jobs:
           tar xzf move2ts-linux-arm64.tar.gz -C npm/linux-arm64/
           unzip -o move2ts-macos-arm64.zip -d npm/darwin-arm64/
           unzip -o move2ts-windows-x64.zip -d npm/win32-x64/
-          chmod +x npm/linux-x64/move2ts npm/linux-arm64/move2ts npm/darwin-x64/move2ts npm/darwin-arm64/move2ts
+          chmod +x npm/linux-x64/move2ts npm/linux-arm64/move2ts npm/darwin-arm64/move2ts
 
       - name: Publish platform packages then main package
         env:
