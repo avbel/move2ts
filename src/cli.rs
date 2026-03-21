@@ -4,7 +4,8 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(
     name = "move2ts",
-    about = "Generate TypeScript wrappers from Sui Move source files"
+    about = "Generate TypeScript wrappers from Sui Move source files",
+    version
 )]
 pub struct Cli {
     /// .move file or package directory (with Move.toml)
