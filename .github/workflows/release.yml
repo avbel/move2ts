@@ -113,6 +113,57 @@ jobs:
             checksums-sha256.txt
           generate_release_notes: true
 
+  update-homebrew:
+    needs: release
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download checksums from release
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release download "$GITHUB_REF_NAME" \
+            --repo avbel/move2ts \
+            --pattern checksums-sha256.txt
+
+          MACOS_ARM64=$(grep 'move2ts-macos-arm64.zip' checksums-sha256.txt | awk '{print $1}')
+          LINUX_X64=$(grep 'move2ts-linux-x64.tar.gz' checksums-sha256.txt | awk '{print $1}')
+          LINUX_ARM64=$(grep 'move2ts-linux-arm64.tar.gz' checksums-sha256.txt | awk '{print $1}')
+
+          gh repo clone avbel/homebrew-tap /tmp/homebrew-tap
+
+          sed -i "s/version \".*\"/version \"$VERSION\"/" /tmp/homebrew-tap/Formula/move2ts.rb
+
+          # Update sha256 for macos arm64 (first sha256 in file)
+          awk -v new="$MACOS_ARM64" '
+            /sha256/ { count++ }
+            count == 1 && /sha256/ { sub(/"[a-f0-9]{64}"/, "\"" new "\""); count = -999 }
+            { print }
+          ' /tmp/homebrew-tap/Formula/move2ts.rb > /tmp/formula.tmp && mv /tmp/formula.tmp /tmp/homebrew-tap/Formula/move2ts.rb
+
+          # Update sha256 for linux x64 (second sha256)
+          awk -v new="$LINUX_X64" '
+            /sha256/ { count++ }
+            count == 2 && /sha256/ { sub(/"[a-f0-9]{64}"/, "\"" new "\""); count = -999 }
+            { print }
+          ' /tmp/homebrew-tap/Formula/move2ts.rb > /tmp/formula.tmp && mv /tmp/formula.tmp /tmp/homebrew-tap/Formula/move2ts.rb
+
+          # Update sha256 for linux arm64 (third sha256)
+          awk -v new="$LINUX_ARM64" '
+            /sha256/ { count++ }
+            count == 3 && /sha256/ { sub(/"[a-f0-9]{64}"/, "\"" new "\""); count = -999 }
+            { print }
+          ' /tmp/homebrew-tap/Formula/move2ts.rb > /tmp/formula.tmp && mv /tmp/formula.tmp /tmp/homebrew-tap/Formula/move2ts.rb
+
+          cd /tmp/homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/move2ts.rb
+          git commit -m "Update move2ts to $VERSION"
+          git push
+
   publish-npm:
     needs: build
     permissions:

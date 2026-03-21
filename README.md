@@ -31,6 +31,12 @@ pnpm add -g move2ts
 npx move2ts <input>
 ```
 
+### Via Homebrew (macOS / Linux)
+
+```
+brew install avbel/tap/move2ts
+```
+
 ### Download from GitHub Releases
 
 Download the binary for your platform from the [Releases page](https://github.com/avbel/move2ts/releases).
