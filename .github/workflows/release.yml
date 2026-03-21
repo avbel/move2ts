@@ -191,7 +191,12 @@ jobs:
         run: |
           VERSION="${TAG_NAME#v}"
           for pkg in npm/*/package.json; do
-            jq --arg v "$VERSION" '.version = $v' "$pkg" > tmp && mv tmp "$pkg"
+            jq --arg v "$VERSION" '
+              .version = $v |
+              if .optionalDependencies then
+                .optionalDependencies |= with_entries(.value = $v)
+              else . end
+            ' "$pkg" > tmp && mv tmp "$pkg"
           done
 
       - name: Extract and assemble platform binaries

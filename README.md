@@ -21,20 +21,20 @@ Generate type-safe TypeScript wrappers for Sui Move smart contracts.
 
 ## Installation
 
-### Via npm (recommended)
-
-```
-npm install -g move2ts
-# or
-pnpm add -g move2ts
-# or
-npx move2ts <input>
-```
-
 ### Via Homebrew (macOS / Linux)
 
 ```
 brew install avbel/tap/move2ts
+```
+
+### Via npm
+
+```
+npm install -g @avbel/move2ts
+# or
+pnpm add -g @avbel/move2ts
+# or
+npx @avbel/move2ts <input>
 ```
 
 ### Download from GitHub Releases

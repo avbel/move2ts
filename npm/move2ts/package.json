@@ -1,5 +1,5 @@
 {
-  "name": "move2ts",
+  "name": "@avbel/move2ts",
   "version": "0.0.0",
   "description": "Generate type-safe TypeScript from Sui Move source files",
   "license": "MIT",
@@ -7,10 +7,10 @@
     "move2ts": "bin/move2ts.js"
   },
   "optionalDependencies": {
-    "@move2ts/linux-x64": "0.0.0",
-    "@move2ts/linux-arm64": "0.0.0",
-    "@move2ts/darwin-arm64": "0.0.0",
-    "@move2ts/win32-x64": "0.0.0"
+    "@avbel/move2ts-linux-x64": "0.0.0",
+    "@avbel/move2ts-linux-arm64": "0.0.0",
+    "@avbel/move2ts-darwin-arm64": "0.0.0",
+    "@avbel/move2ts-win32-x64": "0.0.0"
   },
   "keywords": [
     "sui",
