@@ -1535,4 +1535,76 @@ mod tests {
         assert!(output.contains("export type TradeEvent = {"));
         assert!(!output.contains("TradeEventEvent"));
     }
+
+    #[test]
+    fn event_fields_are_all_string_regardless_of_move_type() {
+        // Event fields must ALL be string in TS, regardless of their Move type.
+        // This test uses every possible Move type to verify none leak through.
+        let module = ModuleInfo {
+            name: "test_mod".to_string(),
+            functions: vec![],
+            structs: vec![StructInfo {
+                name: "ComplexEvent".to_string(),
+                fields: vec![
+                    ("amount".to_string(), MoveType::U64),
+                    ("small_val".to_string(), MoveType::U8),
+                    ("big_val".to_string(), MoveType::U256),
+                    ("is_active".to_string(), MoveType::Bool),
+                    ("sender".to_string(), MoveType::Address),
+                    ("name".to_string(), MoveType::SuiString),
+                    ("obj_id".to_string(), MoveType::ObjectId),
+                    (
+                        "data".to_string(),
+                        MoveType::Vector(Box::new(MoveType::U8)),
+                    ),
+                    (
+                        "scores".to_string(),
+                        MoveType::Vector(Box::new(MoveType::U64)),
+                    ),
+                    (
+                        "maybe_val".to_string(),
+                        MoveType::Option(Box::new(MoveType::U64)),
+                    ),
+                ],
+                has_key: false,
+                has_copy: true,
+                has_drop: true,
+            }],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::from(["ComplexEvent".to_string()]),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: true,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(output.contains("export type ComplexEvent = {"));
+
+        // Extract just the event type block
+        let event_start = output.find("export type ComplexEvent").unwrap();
+        let event_end = output[event_start..].find("};").unwrap() + event_start + 2;
+        let event_block = &output[event_start..event_end];
+
+        // Every field line must end with ": string;"
+        for line in event_block.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("export type") || trimmed == "};" || trimmed.is_empty() {
+                continue;
+            }
+            assert!(
+                trimmed.ends_with(": string;"),
+                "Event field should be string but got: '{trimmed}'"
+            );
+        }
+
+        // Verify NO Move-mapped types leaked through
+        assert!(!event_block.contains("number"), "number should not appear in event type");
+        assert!(!event_block.contains("bigint"), "bigint should not appear in event type");
+        assert!(!event_block.contains("boolean"), "boolean should not appear in event type");
+        assert!(!event_block.contains("Uint8Array"), "Uint8Array should not appear in event type");
+        assert!(!event_block.contains("null"), "null should not appear in event type");
+    }
 }
