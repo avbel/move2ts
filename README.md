@@ -270,7 +270,6 @@ move2ts ./marketplace.move --methods list_item,cancel_listing -o ./sdk
 move2ts ./marketplace.move --skip-methods admin_withdraw,set_fee -o ./sdk
 ```
 
-```
 
 ### Composing multiple transaction commands
 
