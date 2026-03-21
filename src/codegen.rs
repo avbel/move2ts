@@ -344,7 +344,7 @@ fn generate_event_types(
         w.line(&format!("export type {type_name} = {{"));
         w.indent();
         for (field_name, _) in &event.fields {
-            w.line(&format!("readonly {}: string;", to_camel_case(field_name)));
+            w.line(&format!("readonly {field_name}: string;"));
         }
         w.dedent();
         w.line("};");
@@ -1660,7 +1660,7 @@ mod tests {
         assert!(output.contains("export type ItemPurchased = {"));
         assert!(output.contains("readonly buyer: string;"));
         assert!(output.contains("readonly price: string;"));
-        assert!(output.contains("readonly itemId: string;"));
+        assert!(output.contains("readonly item_id: string;"));
     }
 
     #[test]
