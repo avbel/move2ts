@@ -35,7 +35,7 @@ npx move2ts <input>
 
 Download the binary for your platform from the [Releases page](https://github.com/avbel/move2ts/releases).
 
-Available platforms: Linux x64/arm64, macOS x64/arm64, Windows x64.
+Available platforms: Linux x64/arm64, macOS arm64, Windows x64.
 
 ### Build from source
 
