@@ -26,11 +26,6 @@ jobs:
             npm_pkg: linux-arm64
             archive: tar.gz
             suffix: linux-arm64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            npm_pkg: darwin-x64
-            archive: zip
-            suffix: macos-x64
           - target: aarch64-apple-darwin
             os: macos-latest
             npm_pkg: darwin-arm64
@@ -152,7 +147,6 @@ jobs:
         run: |
           tar xzf move2ts-linux-x64.tar.gz -C npm/linux-x64/
           tar xzf move2ts-linux-arm64.tar.gz -C npm/linux-arm64/
-          unzip -o move2ts-macos-x64.zip -d npm/darwin-x64/
           unzip -o move2ts-macos-arm64.zip -d npm/darwin-arm64/
           unzip -o move2ts-windows-x64.zip -d npm/win32-x64/
           chmod +x npm/linux-x64/move2ts npm/linux-arm64/move2ts npm/darwin-x64/move2ts npm/darwin-arm64/move2ts
@@ -162,7 +156,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           ROOT="$PWD"
-          for pkg in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do
+          for pkg in linux-x64 linux-arm64 darwin-arm64 win32-x64; do
             cd "$ROOT/npm/$pkg" && pnpm publish --access public --no-git-checks --provenance
           done
           cd "$ROOT/npm/move2ts" && pnpm publish --access public --no-git-checks --provenance

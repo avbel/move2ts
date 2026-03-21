@@ -9,7 +9,6 @@
   "optionalDependencies": {
     "@move2ts/linux-x64": "0.0.0",
     "@move2ts/linux-arm64": "0.0.0",
-    "@move2ts/darwin-x64": "0.0.0",
     "@move2ts/darwin-arm64": "0.0.0",
     "@move2ts/win32-x64": "0.0.0"
   },

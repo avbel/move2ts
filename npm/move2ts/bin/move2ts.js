@@ -6,7 +6,6 @@ const path = require('path');
 const platformMap = {
   'linux-x64': '@move2ts/linux-x64',
   'linux-arm64': '@move2ts/linux-arm64',
-  'darwin-x64': '@move2ts/darwin-x64',
   'darwin-arm64': '@move2ts/darwin-arm64',
   'win32-x64': '@move2ts/win32-x64',
 };
