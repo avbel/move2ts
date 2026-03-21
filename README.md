@@ -117,15 +117,15 @@ import process from 'node:process';
 import type { TransactionObjectInput, TransactionResult } from '@mysten/sui/transactions';
 import { Transaction } from '@mysten/sui/transactions';
 import { isValidSuiAddress } from '@mysten/sui/utils';
-import { Move2TsConfigError } from './move2ts-errors';
+import { BadArgumentError } from './move2ts-errors';
 
 function getPackageId(): string {
   const id = process.env.MY_PROJECT_PACKAGE_ID;
   if (!id) {
-    throw new Move2TsConfigError('MY_PROJECT_PACKAGE_ID environment variable is not set');
+    throw new BadArgumentError('MY_PROJECT_PACKAGE_ID environment variable is not set');
   }
   if (!isValidSuiAddress(id)) {
-    throw new Move2TsConfigError(`MY_PROJECT_PACKAGE_ID is not a valid Sui address: ${id}`);
+    throw new BadArgumentError(`MY_PROJECT_PACKAGE_ID is not a valid Sui address: ${id}`);
   }
   return id;
 }
@@ -133,10 +133,10 @@ function getPackageId(): string {
 function getMarketplaceId(): string {
   const id = process.env.MY_PROJECT_MARKETPLACE_ID;
   if (!id) {
-    throw new Move2TsConfigError('MY_PROJECT_MARKETPLACE_ID environment variable is not set');
+    throw new BadArgumentError('MY_PROJECT_MARKETPLACE_ID environment variable is not set');
   }
   if (!isValidSuiAddress(id)) {
-    throw new Move2TsConfigError(`MY_PROJECT_MARKETPLACE_ID is not a valid Sui address: ${id}`);
+    throw new BadArgumentError(`MY_PROJECT_MARKETPLACE_ID is not a valid Sui address: ${id}`);
   }
   return id;
 }
@@ -203,7 +203,7 @@ Key points in the generated code:
 
 When a function parameter is a pure value struct (has `copy` and `drop` abilities but no `key`), the generated code imports `bcs` from `@mysten/bcs` and serializes the struct using BCS encoding instead of `tx.object()`.
 
-A shared `move2ts-errors.ts` file is also generated with the `Move2TsConfigError` class. Address validation uses `isValidSuiAddress` from `@mysten/sui/utils`.
+A shared `move2ts-errors.ts` file is also generated with the `BadArgumentError` class. Address validation uses `isValidSuiAddress` from `@mysten/sui/utils`.
 
 ### Event Types (`--events`)
 

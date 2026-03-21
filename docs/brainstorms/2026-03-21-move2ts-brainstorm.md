@@ -61,11 +61,11 @@ Use the `move-compiler` parser from `~/Projects/sui` as a Rust path dependency. 
 - This means only `init()` can create it — regardless of whether it's shared, transferred, or frozen
 - In generated functions, singleton parameters become optional (`objectId?: string`)
 - If not provided, read from env variable using pattern `MODULE_STRUCT_ID` (e.g., `MY_MODULE_REGISTRY_ID`)
-- If env var is also undefined, throw a dedicated error type (e.g., `Move2TsConfigError`)
+- If env var is also undefined, throw a dedicated error type (e.g., `BadArgumentError`)
 
 ### Package ID Handling
 - Generated file starts with a const reading from env variable
-- If env var not set, throw `Move2TsConfigError` at import/init time
+- If env var not set, throw `BadArgumentError` at import/init time
 - Env var pattern: `MODULE_PACKAGE_ID` (e.g., `MY_MODULE_PACKAGE_ID`)
 
 ### CLI Interface
@@ -92,7 +92,7 @@ Options:
 - No AbortSignal — wrappers are synchronous (they append to a transaction, no network calls)
 
 ### Error Handling
-- Generate a shared `move2ts-errors.ts` module with `Move2TsConfigError` class; each generated module imports from it
+- Generate a shared `move2ts-errors.ts` module with `BadArgumentError` class; each generated module imports from it
 - Thrown at function call time (not import time) for singleton IDs
 - Thrown at module load time for package ID (required for all calls)
 
@@ -136,11 +136,11 @@ Generated TypeScript:
 ```typescript
 import process from 'node:process';
 import { Transaction } from '@mysten/sui/transactions';
-import { Move2TsConfigError } from './move2ts-errors';
+import { BadArgumentError } from './move2ts-errors';
 
 const marketplacePackageId = process.env.MARKETPLACE_PACKAGE_ID;
 if (!marketplacePackageId) {
-  throw new Move2TsConfigError('MARKETPLACE_PACKAGE_ID environment variable is not set');
+  throw new BadArgumentError('MARKETPLACE_PACKAGE_ID environment variable is not set');
 }
 
 // Singleton: Marketplace is shared in init()
@@ -161,7 +161,7 @@ export function listItem(
 ) {
   const resolvedMarketplaceId = args.marketplaceId ?? marketplaceMarketplaceId;
   if (!resolvedMarketplaceId) {
-    throw new Move2TsConfigError(
+    throw new BadArgumentError(
       'marketplaceId must be provided or MARKETPLACE_MARKETPLACE_ID env var must be set'
     );
   }
