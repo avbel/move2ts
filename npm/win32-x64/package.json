@@ -1,5 +1,5 @@
 {
-  "name": "@avbel/move2ts-win32-x64",
+  "name": "@move4ts/win32-x64",
   "version": "0.0.0",
   "description": "move2ts binary for win32-x64",
   "license": "MIT",

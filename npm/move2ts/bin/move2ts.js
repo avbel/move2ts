@@ -4,10 +4,10 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const platformMap = {
-  'linux-x64': '@avbel/move2ts-linux-x64',
-  'linux-arm64': '@avbel/move2ts-linux-arm64',
-  'darwin-arm64': '@avbel/move2ts-darwin-arm64',
-  'win32-x64': '@avbel/move2ts-win32-x64',
+  'linux-x64': '@move4ts/linux-x64',
+  'linux-arm64': '@move4ts/linux-arm64',
+  'darwin-arm64': '@move4ts/darwin-arm64',
+  'win32-x64': '@move4ts/win32-x64',
 };
 
 const key = `${process.platform}-${process.arch}`;

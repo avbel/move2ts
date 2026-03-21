@@ -30,11 +30,11 @@ brew install avbel/tap/move2ts
 ### Via npm
 
 ```
-npm install -g @avbel/move2ts
+npm install -g @move4ts/move4ts
 # or
-pnpm add -g @avbel/move2ts
+pnpm add -g @move4ts/move4ts
 # or
-npx @avbel/move2ts <input>
+npx @move4ts/move4ts <input>
 ```
 
 ### Download from GitHub Releases

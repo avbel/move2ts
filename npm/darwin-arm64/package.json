@@ -1,5 +1,5 @@
 {
-  "name": "@avbel/move2ts-darwin-arm64",
+  "name": "@move4ts/darwin-arm64",
   "version": "0.0.0",
   "description": "move2ts binary for darwin-arm64",
   "license": "MIT",
