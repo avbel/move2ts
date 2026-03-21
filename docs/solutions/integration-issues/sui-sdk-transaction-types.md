@@ -53,8 +53,8 @@ if (!packageId) throw new Error('...');
 // GOOD — throws only when function is called
 function getPackageId(): string {
   const id = process.env.MY_PACKAGE_ID;
-  if (!id) throw new BadArgumentError('...');
-  if (!isValidSuiAddress(id)) throw new BadArgumentError('...');
+  if (!id) throw new InvalidConfigError('...');
+  if (!isValidSuiAddress(id)) throw new InvalidConfigError('...');
   return id;
 }
 ```

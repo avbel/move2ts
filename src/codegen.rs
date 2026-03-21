@@ -269,7 +269,7 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     );
     w.line("import { Transaction } from '@mysten/sui/transactions';");
     w.line("import { isValidSuiAddress } from '@mysten/sui/utils';");
-    w.line("import { BadArgumentError } from './move2ts-errors';");
+    w.line("import { InvalidConfigError } from './move2ts-errors';");
     if needs_bcs {
         w.line("import { bcs } from '@mysten/bcs';");
     }
@@ -350,9 +350,9 @@ fn generate_event_types(w: &mut CodeWriter, module: &ModuleInfo) {
 pub fn generate_errors_module() -> String {
     let mut w = CodeWriter::new();
 
-    w.line("export class BadArgumentError extends Error {");
+    w.line("export class InvalidConfigError extends Error {");
     w.indent();
-    w.line("override readonly name = 'BadArgumentError' as const;");
+    w.line("override readonly name = 'InvalidConfigError' as const;");
     w.line("constructor(message: string) {");
     w.indent();
     w.line("super(message);");
@@ -373,14 +373,14 @@ fn generate_package_id_getter(w: &mut CodeWriter, env_var_name: &str) {
     w.line("if (!id) {");
     w.indent();
     w.line(&format!(
-        "throw new BadArgumentError('{env_var_name} environment variable is not set');"
+        "throw new InvalidConfigError('{env_var_name} environment variable is not set');"
     ));
     w.dedent();
     w.line("}");
     w.line("if (!isValidSuiAddress(id)) {");
     w.indent();
     w.line(&format!(
-        "throw new BadArgumentError(`{env_var_name} is not a valid Sui address: ${{id}}`);"
+        "throw new InvalidConfigError(`{env_var_name} is not a valid Sui address: ${{id}}`);"
     ));
     w.dedent();
     w.line("}");
@@ -404,14 +404,14 @@ fn generate_singleton_getter(w: &mut CodeWriter, project_name: &str, struct_name
     w.line("if (!id) {");
     w.indent();
     w.line(&format!(
-        "throw new BadArgumentError('{env_var} environment variable is not set');"
+        "throw new InvalidConfigError('{env_var} environment variable is not set');"
     ));
     w.dedent();
     w.line("}");
     w.line("if (!isValidSuiAddress(id)) {");
     w.indent();
     w.line(&format!(
-        "throw new BadArgumentError(`{env_var} is not a valid Sui address: ${{id}}`);"
+        "throw new InvalidConfigError(`{env_var} is not a valid Sui address: ${{id}}`);"
     ));
     w.dedent();
     w.line("}");
@@ -872,7 +872,7 @@ mod tests {
     #[test]
     fn generates_errors_module() {
         let output = generate_errors_module();
-        assert!(output.contains("export class BadArgumentError extends Error"));
+        assert!(output.contains("export class InvalidConfigError extends Error"));
         assert!(!output.contains("validateSuiAddress")); // removed — uses @mysten/sui/utils
     }
 

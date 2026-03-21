@@ -326,13 +326,13 @@ impl CodeWriter {
 import process from 'node:process';
 import type { TransactionObjectInput, TransactionResult } from '@mysten/sui/transactions';
 import { Transaction } from '@mysten/sui/transactions';
-import { BadArgumentError, validateSuiAddress } from './move2ts-errors';
+import { InvalidConfigError, validateSuiAddress } from './move2ts-errors';
 
 // Package ID env var: derived from Move.toml project name, or overridden via --package-id-name
 function getPackageId(): string {
   const id = process.env.MY_PROJECT_PACKAGE_ID;
   if (!id) {
-    throw new BadArgumentError('MY_PROJECT_PACKAGE_ID environment variable is not set');
+    throw new InvalidConfigError('MY_PROJECT_PACKAGE_ID environment variable is not set');
   }
   return validateSuiAddress(id, 'MY_PROJECT_PACKAGE_ID');
 }
@@ -340,7 +340,7 @@ function getPackageId(): string {
 function getMarketplaceId(): string {
   const id = process.env.MY_PROJECT_MARKETPLACE_ID;
   if (!id) {
-    throw new BadArgumentError('MY_PROJECT_MARKETPLACE_ID environment variable is not set');
+    throw new InvalidConfigError('MY_PROJECT_MARKETPLACE_ID environment variable is not set');
   }
   return validateSuiAddress(id, 'MY_PROJECT_MARKETPLACE_ID');
 }
@@ -425,8 +425,8 @@ export function getTimedPrice(
 #### `move2ts-errors.ts`
 
 ```typescript
-export class BadArgumentError extends Error {
-  override readonly name = 'BadArgumentError' as const;
+export class InvalidConfigError extends Error {
+  override readonly name = 'InvalidConfigError' as const;
   constructor(message: string) {
     super(message);
   }
@@ -434,7 +434,7 @@ export class BadArgumentError extends Error {
 
 export function validateSuiAddress(value: string, name: string): string {
   if (!/^0x[0-9a-fA-F]{1,64}$/.test(value)) {
-    throw new BadArgumentError(`${name} is not a valid Sui address: ${value}`);
+    throw new InvalidConfigError(`${name} is not a valid Sui address: ${value}`);
   }
   return value;
 }
@@ -598,7 +598,7 @@ Each platform `package.json` must include:
 - [ ] Handle generic type parameters as named string args
 - [ ] Auto-strip `TxContext` params; auto-inject `Clock` as `tx.object.clock()` and `Random` as `tx.object.random()`
 - [ ] `--methods` and `--skip-methods` filtering with validation
-- [ ] Generate shared `move2ts-errors.ts` with `BadArgumentError` and `validateSuiAddress`
+- [ ] Generate shared `move2ts-errors.ts` with `InvalidConfigError` and `validateSuiAddress`
 - [ ] Correct recursive type mapping for vectors, options, and nested combinations
 - [ ] `vector<u8>` special-cased to `Uint8Array`
 - [ ] camelCase for all generated TS constants

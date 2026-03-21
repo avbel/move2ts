@@ -362,8 +362,8 @@ fn full_pipeline_events() {
 #[test]
 fn errors_module_generates_valid_content() {
     let output = generate_errors_module();
-    assert!(output.contains("export class BadArgumentError extends Error"));
-    assert!(output.contains("override readonly name = 'BadArgumentError' as const;"));
+    assert!(output.contains("export class InvalidConfigError extends Error"));
+    assert!(output.contains("override readonly name = 'InvalidConfigError' as const;"));
     assert!(!output.contains("validateSuiAddress"));
 }
 
