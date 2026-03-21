@@ -1020,4 +1020,194 @@ mod tests {
         let output = generate_module(&module, &config);
         assert!(output.contains("export function reset(tx: Transaction): TransactionResult {"));
     }
+
+    // ---- BCS serialization tests ----
+
+    #[test]
+    fn bcs_schema_primitives() {
+        assert_eq!(to_bcs_schema(&MoveType::U8), "bcs.u8()");
+        assert_eq!(to_bcs_schema(&MoveType::U64), "bcs.u64()");
+        assert_eq!(to_bcs_schema(&MoveType::Bool), "bcs.bool()");
+        assert_eq!(to_bcs_schema(&MoveType::Address), "bcs.Address");
+        assert_eq!(to_bcs_schema(&MoveType::SuiString), "bcs.string()");
+        assert_eq!(to_bcs_schema(&MoveType::ObjectId), "bcs.Address");
+    }
+
+    #[test]
+    fn bcs_schema_nested() {
+        let vec_u64 = MoveType::Vector(Box::new(MoveType::U64));
+        assert_eq!(to_bcs_schema(&vec_u64), "bcs.vector(bcs.u64())");
+
+        let opt_bool = MoveType::Option(Box::new(MoveType::Bool));
+        assert_eq!(to_bcs_schema(&opt_bool), "bcs.option(bcs.bool())");
+
+        let vec_opt_u8 = MoveType::Vector(Box::new(MoveType::Option(Box::new(MoveType::U8))));
+        assert_eq!(to_bcs_schema(&vec_opt_u8), "bcs.vector(bcs.option(bcs.u8()))");
+    }
+
+    #[test]
+    fn bcs_struct_encoding() {
+        let si = StructInfo {
+            name: "MyData".to_string(),
+            fields: vec![
+                ("value".to_string(), MoveType::U64),
+                ("flag".to_string(), MoveType::Bool),
+                ("name".to_string(), MoveType::SuiString),
+            ],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let result = to_bcs_struct_encoding(&si, "args.data");
+        assert_eq!(
+            result,
+            "tx.pure(bcs.struct('MyData', { value: bcs.u64(), flag: bcs.bool(), name: bcs.string() }).serialize(args.data))"
+        );
+    }
+
+    #[test]
+    fn pure_value_struct_uses_bcs_not_object() {
+        let pure_struct = StructInfo {
+            name: "Config".to_string(),
+            fields: vec![
+                ("max_size".to_string(), MoveType::U64),
+                ("enabled".to_string(), MoveType::Bool),
+            ],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        assert!(pure_struct.is_pure_value());
+
+        let structs = vec![pure_struct];
+        let ty = MoveType::Struct {
+            module: None,
+            name: "Config".to_string(),
+            type_args: vec![],
+        };
+
+        let result = to_tx_encoding_with_context(&ty, "args.config", &structs);
+        assert!(result.contains("bcs.struct('Config'"));
+        assert!(result.contains("bcs.u64()"));
+        assert!(result.contains("bcs.bool()"));
+        assert!(!result.contains("tx.object"));
+    }
+
+    #[test]
+    fn key_struct_uses_object_not_bcs() {
+        let key_struct = StructInfo {
+            name: "Pool".to_string(),
+            fields: vec![("balance".to_string(), MoveType::U64)],
+            has_key: true,
+            has_copy: false,
+            has_drop: false,
+        };
+        assert!(!key_struct.is_pure_value());
+
+        let structs = vec![key_struct];
+        let ty = MoveType::Struct {
+            module: None,
+            name: "Pool".to_string(),
+            type_args: vec![],
+        };
+
+        let result = to_tx_encoding_with_context(&ty, "args.poolId", &structs);
+        assert_eq!(result, "tx.object(args.poolId)");
+    }
+
+    #[test]
+    fn unknown_struct_defaults_to_object() {
+        let structs: Vec<StructInfo> = vec![];
+        let ty = MoveType::Struct {
+            module: Some("other".to_string()),
+            name: "ExternalType".to_string(),
+            type_args: vec![],
+        };
+
+        let result = to_tx_encoding_with_context(&ty, "args.ext", &structs);
+        assert_eq!(result, "tx.object(args.ext)");
+    }
+
+    #[test]
+    fn generates_bcs_import_when_pure_struct_used() {
+        let module = ModuleInfo {
+            name: "config_mod".to_string(),
+            functions: vec![FunctionInfo {
+                name: "set_config".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "config".to_string(),
+                    move_type: MoveType::Struct {
+                        module: None,
+                        name: "Config".to_string(),
+                        type_args: vec![],
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![StructInfo {
+                name: "Config".to_string(),
+                fields: vec![("max_size".to_string(), MoveType::U64)],
+                has_key: false,
+                has_copy: true,
+                has_drop: true,
+            }],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(output.contains("import { bcs } from '@mysten/bcs';"), "should import bcs");
+        assert!(output.contains("bcs.struct('Config'"), "should use BCS struct encoding");
+        assert!(!output.contains("tx.object(args.config)"), "should NOT use tx.object for pure struct");
+    }
+
+    #[test]
+    fn no_bcs_import_when_only_key_structs() {
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "do_thing".to_string(),
+                is_entry: true,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "pool".to_string(),
+                    move_type: MoveType::Ref {
+                        inner: Box::new(MoveType::Struct {
+                            module: None,
+                            name: "Pool".to_string(),
+                            type_args: vec![],
+                        }),
+                        is_mut: true,
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![StructInfo {
+                name: "Pool".to_string(),
+                fields: vec![],
+                has_key: true,
+                has_copy: false,
+                has_drop: false,
+            }],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(!output.contains("@mysten/bcs"), "should NOT import bcs when no pure structs");
+    }
 }
