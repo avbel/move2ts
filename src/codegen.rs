@@ -334,8 +334,6 @@ fn generate_event_types(
         return;
     }
 
-    w.line("// --- Event Types ---");
-    w.blank();
     for event in events {
         // If also used as a function param, add "Event" suffix to avoid name collision
         let type_name = if referenced.contains(&event.name) {
@@ -1658,7 +1656,7 @@ mod tests {
         };
 
         let output = generate_module(&module, &config);
-        assert!(output.contains("// --- Event Types ---"));
+        assert!(output.contains("export type ItemPurchased = {"));
         assert!(output.contains("export type ItemPurchased = {"));
         assert!(output.contains("readonly buyer: string;"));
         assert!(output.contains("readonly price: string;"));
