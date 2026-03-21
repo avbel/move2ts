@@ -197,15 +197,7 @@ fn convert_type(ty: &Type, type_param_names: &HashSet<String>) -> MoveType {
             is_mut: *is_mut,
         },
         Type_::Apply(name_access_chain) => convert_apply_type(name_access_chain, type_param_names),
-        Type_::Multiple(types) => {
-            // Multiple is used for tuples — treat as Unit for our purposes
-            if types.is_empty() {
-                MoveType::Unit
-            } else {
-                // We don't handle tuple returns in the TS wrapper, treat as Unit
-                MoveType::Unit
-            }
-        }
+        Type_::Multiple(_) => MoveType::Unit, // tuples not relevant for TS wrappers
         Type_::Fun(_, _) => MoveType::Unit, // function types not relevant
         Type_::UnresolvedError => MoveType::Unit,
     }

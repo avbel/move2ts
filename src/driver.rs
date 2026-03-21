@@ -105,7 +105,7 @@ pub fn run(cli: &Cli) -> Result<()> {
 
     for module in &mut all_modules {
         // Apply singleton overrides: add any CLI-specified singletons
-        for (struct_name, _env_var) in &singleton_overrides {
+        for struct_name in &singleton_overrides {
             module.singletons.insert(struct_name.clone());
         }
 
@@ -224,17 +224,17 @@ fn find_move_files_recursive(dir: &Path, files: &mut Vec<std::path::PathBuf>) ->
     Ok(())
 }
 
-/// Parses `--singletons Struct=ENV_VAR` CLI option into a set of overrides.
-fn parse_singleton_overrides(singletons: &Option<Vec<String>>) -> Result<Vec<(String, String)>> {
+/// Parses `--singletons StructName` CLI option into a list of struct names.
+/// Env var names are always auto-derived from project + struct name.
+fn parse_singleton_overrides(singletons: &Option<Vec<String>>) -> Result<Vec<String>> {
     let mut overrides = Vec::new();
 
     if let Some(entries) = singletons {
         for entry in entries {
-            let parts: Vec<&str> = entry.splitn(2, '=').collect();
-            if parts.len() != 2 {
-                bail!("Invalid --singletons format: '{entry}'. Expected 'StructName=ENV_VAR_NAME'");
+            if entry.is_empty() {
+                bail!("Invalid --singletons format: empty entry");
             }
-            overrides.push((parts[0].to_string(), parts[1].to_string()));
+            overrides.push(entry.clone());
         }
     }
 
@@ -282,19 +282,13 @@ version = "0.1.0"
     #[test]
     fn parses_singleton_overrides_valid() {
         let input = Some(vec![
-            "Marketplace=MY_MARKETPLACE_ID".to_string(),
-            "AdminCap=MY_ADMIN_CAP_ID".to_string(),
+            "Marketplace".to_string(),
+            "AdminCap".to_string(),
         ]);
         let result = parse_singleton_overrides(&input).unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(
-            result[0],
-            ("Marketplace".to_string(), "MY_MARKETPLACE_ID".to_string())
-        );
-        assert_eq!(
-            result[1],
-            ("AdminCap".to_string(), "MY_ADMIN_CAP_ID".to_string())
-        );
+        assert_eq!(result[0], "Marketplace");
+        assert_eq!(result[1], "AdminCap");
     }
 
     #[test]
@@ -305,7 +299,7 @@ version = "0.1.0"
 
     #[test]
     fn fails_on_invalid_singleton_format() {
-        let input = Some(vec!["BadFormat".to_string()]);
+        let input = Some(vec![String::new()]);
         let result = parse_singleton_overrides(&input);
         assert!(result.is_err());
     }

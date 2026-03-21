@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.jpg" alt="move2ts" width="200" />
+  <img src="logo.jpg" alt="move2ts" width="300" />
 </p>
 
 # move2ts
@@ -73,7 +73,7 @@ Options:
   -o, --output <dir>               Output directory (default: ./generated)
   --methods <method1,method2>      Generate only these methods
   --skip-methods <m1,m2>           Skip these methods
-  --singletons <Struct=ENV_VAR>    Manual singleton overrides
+  --singletons <Struct1,Struct2>   Manual singleton overrides
   --package-id-name <ENV_VAR>      Override package ID env var name
 ```
 
@@ -270,7 +270,7 @@ await client.signAndExecuteTransaction({ transaction: tx, signer: keypair });
 
 ```bash
 # When the automatic singleton detection doesn't work (e.g., helper function creates the object)
-move2ts ./contracts/ --singletons Registry=MY_REGISTRY_ID,Config=MY_CONFIG_ID
+move2ts ./contracts/ --singletons Registry,Config
 ```
 
 ## How It Works

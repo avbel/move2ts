@@ -22,7 +22,7 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',')]
     pub skip_methods: Option<Vec<String>>,
 
-    /// Manual singleton overrides (Struct=ENV_VAR, comma-separated)
+    /// Manual singleton overrides (struct names, comma-separated)
     #[arg(long, value_delimiter = ',')]
     pub singletons: Option<Vec<String>>,
 

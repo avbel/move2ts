@@ -126,7 +126,7 @@ fn to_bcs_type_string(ty: &MoveType) -> String {
         MoveType::ObjectId => "address".to_string(),
         MoveType::Vector(inner) => format!("vector<{}>", to_bcs_type_string(inner)),
         MoveType::Option(inner) => format!("option<{}>", to_bcs_type_string(inner)),
-        _ => "u8".to_string(), // fallback
+        _ => panic!("unsupported BCS type: {ty:?}"),
     }
 }
 
@@ -195,11 +195,8 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     }
 
     // --- Function wrappers ---
-    for (i, func) in module.functions.iter().enumerate() {
-        if i > 0 || !referenced_structs.is_empty() || !module.singletons.is_empty() {
-            // blank line between sections already handled
-        }
-        generate_function_wrapper(&mut w, func, &module.name, &module.singletons, config);
+    for func in &module.functions {
+        generate_function_wrapper(&mut w, func, &module.name);
         w.blank();
     }
 
@@ -341,13 +338,7 @@ fn collect_struct_refs_from_type(
 }
 
 /// Generates a TypeScript function wrapper for a Move function.
-fn generate_function_wrapper(
-    w: &mut CodeWriter,
-    func: &FunctionInfo,
-    module_name: &str,
-    _singletons: &HashSet<String>,
-    _config: &CodegenConfig,
-) {
+fn generate_function_wrapper(w: &mut CodeWriter, func: &FunctionInfo, module_name: &str) {
     let ts_name = to_camel_case(&func.name);
     let has_args = !func.params.is_empty() || !func.type_params.is_empty();
 
