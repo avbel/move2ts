@@ -9,10 +9,9 @@ use move_compiler::{
 };
 use move_symbol_pool::Symbol;
 
-/// Wraps the move-compiler parser with a reusable CompilationEnv.
-pub struct MoveParser {
-    env: CompilationEnv,
-}
+/// Wraps the move-compiler parser. Stateless — creates a fresh CompilationEnv
+/// for each `parse_source` call to prevent diagnostic leakage between files.
+pub struct MoveParser;
 
 impl Default for MoveParser {
     fn default() -> Self {
@@ -22,7 +21,12 @@ impl Default for MoveParser {
 
 impl MoveParser {
     pub fn new() -> Self {
-        let env = CompilationEnv::new(
+        Self
+    }
+
+    /// Creates a fresh `CompilationEnv` for a single parse invocation.
+    fn make_env() -> CompilationEnv {
+        CompilationEnv::new(
             Flags::empty(),
             vec![],
             vec![],
@@ -33,25 +37,21 @@ impl MoveParser {
                 ..Default::default()
             }),
             None,
-        );
-        Self { env }
+        )
     }
 
     /// Parse a Move source string into a list of AST definitions.
     pub fn parse_source(&self, source: &str) -> Result<Vec<Definition>> {
+        let env = Self::make_env();
         let file_hash = FileHash::new(source);
-        parse_file_string(&self.env, file_hash, source, Some(Symbol::from("move2ts"))).map_err(
-            |diags| {
-                let messages: Vec<String> = diags
-                    .into_codespan_format()
-                    .into_iter()
-                    .map(|(severity, msg, _primary, _secondary, _notes)| {
-                        format!("{severity:?}: {msg}")
-                    })
-                    .collect();
-                anyhow!("Parse errors:\n{}", messages.join("\n"))
-            },
-        )
+        parse_file_string(&env, file_hash, source, Some(Symbol::from("move2ts"))).map_err(|diags| {
+            let messages: Vec<String> = diags
+                .into_codespan_format()
+                .into_iter()
+                .map(|(severity, msg, _primary, _secondary, _notes)| format!("{severity:?}: {msg}"))
+                .collect();
+            anyhow!("Parse errors:\n{}", messages.join("\n"))
+        })
     }
 }
 

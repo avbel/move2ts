@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use convert_case::{Case, Casing};
 
-use crate::analyzer::{FunctionInfo, ModuleInfo, MoveType, StructInfo};
+use crate::ir::{FunctionInfo, ModuleInfo, MoveType, StructInfo};
 
 /// Configuration for code generation.
 pub struct CodegenConfig {
@@ -111,6 +111,58 @@ pub fn to_tx_encoding(ty: &MoveType, expr: &str) -> String {
     }
 }
 
+/// Maps MoveType to BCS schema builder call for @mysten/bcs.
+fn to_bcs_schema(ty: &MoveType) -> String {
+    match ty {
+        MoveType::U8 => "bcs.u8()".to_string(),
+        MoveType::U16 => "bcs.u16()".to_string(),
+        MoveType::U32 => "bcs.u32()".to_string(),
+        MoveType::U64 => "bcs.u64()".to_string(),
+        MoveType::U128 => "bcs.u128()".to_string(),
+        MoveType::U256 => "bcs.u256()".to_string(),
+        MoveType::Bool => "bcs.bool()".to_string(),
+        MoveType::Address => "bcs.Address".to_string(),
+        MoveType::SuiString => "bcs.string()".to_string(),
+        MoveType::ObjectId => "bcs.Address".to_string(),
+        MoveType::Vector(inner) => format!("bcs.vector({})", to_bcs_schema(inner)),
+        MoveType::Option(inner) => format!("bcs.option({})", to_bcs_schema(inner)),
+        _ => "bcs.bytes(32)".to_string(), // fallback for unknown
+    }
+}
+
+/// Generates a BCS struct serialization call for a pure value struct.
+/// Returns something like: `tx.pure(bcs.struct('Name', { f1: bcs.u64(), f2: bcs.bool() }).serialize(expr))`
+fn to_bcs_struct_encoding(struct_info: &StructInfo, expr: &str) -> String {
+    let field_schemas: Vec<String> = struct_info
+        .fields
+        .iter()
+        .map(|(name, ty)| format!("{}: {}", to_camel_case(name), to_bcs_schema(ty)))
+        .collect();
+    let fields_str = field_schemas.join(", ");
+    format!(
+        "tx.pure(bcs.struct('{}', {{ {} }}).serialize({}))",
+        struct_info.name, fields_str, expr
+    )
+}
+
+/// Maps a MoveType to its tx.pure.* or tx.object() encoding call,
+/// with context about the module's structs to distinguish pure value structs from objects.
+fn to_tx_encoding_with_context(ty: &MoveType, expr: &str, structs: &[StructInfo]) -> String {
+    match ty {
+        MoveType::Struct { name, .. } => {
+            // Look up the struct to determine if it's a pure value type
+            if let Some(si) = structs.iter().find(|s| s.name == *name)
+                && si.is_pure_value()
+            {
+                return to_bcs_struct_encoding(si, expr);
+            }
+            // Default: treat as object
+            format!("tx.object({expr})")
+        }
+        _ => to_tx_encoding(ty, expr),
+    }
+}
+
 /// Produces the BCS type string for nested pure encoding (e.g., 'vector<u64>', 'option<address>').
 fn to_bcs_type_string(ty: &MoveType) -> String {
     match ty {
@@ -136,10 +188,7 @@ pub fn validate_identifier(name: &str) -> anyhow::Result<()> {
     if name.is_empty() {
         anyhow::bail!("identifier must not be empty");
     }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         anyhow::bail!(
             "identifier '{name}' contains unsafe characters (only alphanumeric and _ allowed)"
         );
@@ -165,6 +214,20 @@ pub fn to_env_var_name(name: &str) -> String {
 pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     let mut w = CodeWriter::new();
 
+    // Check if any function uses a pure value struct
+    let needs_bcs = module.functions.iter().any(|f| {
+        f.params.iter().any(|p| {
+            if let MoveType::Struct { name, .. } = &p.move_type {
+                module
+                    .structs
+                    .iter()
+                    .any(|s| s.name == *name && s.is_pure_value())
+            } else {
+                false
+            }
+        })
+    });
+
     // --- Imports ---
     w.line("import process from 'node:process';");
     w.line(
@@ -173,6 +236,9 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     w.line("import { Transaction } from '@mysten/sui/transactions';");
     w.line("import { isValidSuiAddress } from '@mysten/sui/utils';");
     w.line("import { Move2TsConfigError } from './move2ts-errors';");
+    if needs_bcs {
+        w.line("import { bcs } from '@mysten/bcs';");
+    }
     w.blank();
 
     // --- Package ID lazy getter ---
@@ -196,7 +262,7 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
 
     // --- Function wrappers ---
     for func in &module.functions {
-        generate_function_wrapper(&mut w, func, &module.name);
+        generate_function_wrapper(&mut w, func, &module.name, &module.structs);
         w.blank();
     }
 
@@ -338,7 +404,12 @@ fn collect_struct_refs_from_type(
 }
 
 /// Generates a TypeScript function wrapper for a Move function.
-fn generate_function_wrapper(w: &mut CodeWriter, func: &FunctionInfo, module_name: &str) {
+fn generate_function_wrapper(
+    w: &mut CodeWriter,
+    func: &FunctionInfo,
+    module_name: &str,
+    structs: &[StructInfo],
+) {
     let ts_name = to_camel_case(&func.name);
     let has_args = !func.params.is_empty() || !func.type_params.is_empty();
 
@@ -391,10 +462,10 @@ fn generate_function_wrapper(w: &mut CodeWriter, func: &FunctionInfo, module_nam
             let struct_name = param.move_type.struct_name().unwrap_or(&param.name);
             let getter_name = format!("get{struct_name}Id");
             let full_expr = format!("args.{ts_param_name} ?? {getter_name}()");
-            to_tx_encoding(&param.move_type, &full_expr)
+            to_tx_encoding_with_context(&param.move_type, &full_expr, structs)
         } else {
             let accessor = format!("args.{ts_param_name}");
-            to_tx_encoding(&param.move_type, &accessor)
+            to_tx_encoding_with_context(&param.move_type, &accessor, structs)
         };
         move_args.push(expr);
     }
@@ -450,7 +521,7 @@ fn generate_function_wrapper(w: &mut CodeWriter, func: &FunctionInfo, module_nam
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::ParamInfo;
+    use crate::ir::ParamInfo;
 
     // ---- to_ts_type tests ----
 
@@ -872,6 +943,8 @@ mod tests {
                     ("seller".to_string(), MoveType::Address),
                 ],
                 has_key: true,
+                has_copy: false,
+                has_drop: false,
             }],
             singletons: HashSet::new(),
         };
@@ -908,6 +981,8 @@ mod tests {
                 name: "InternalState".to_string(),
                 fields: vec![("count".to_string(), MoveType::U64)],
                 has_key: false,
+                has_copy: false,
+                has_drop: false,
             }],
             singletons: HashSet::new(),
         };

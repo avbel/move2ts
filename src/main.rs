@@ -1,13 +1,8 @@
-mod analyzer;
-mod cli;
-mod codegen;
-mod driver;
-mod parser;
-
 use std::process;
 
 use clap::Parser;
-use cli::Cli;
+use move2ts::cli::Cli;
+use move2ts::driver;
 
 fn main() {
     let cli = Cli::parse();

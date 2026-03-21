@@ -73,7 +73,7 @@ Options:
   -o, --output <dir>               Output directory (default: ./generated)
   --methods <method1,method2>      Generate only these methods
   --skip-methods <m1,m2>           Skip these methods
-  --singletons <Struct1,Struct2>   Manual singleton overrides
+  --singletons <Struct1,Struct2>   Manual singleton overrides (struct names)
   --package-id-name <ENV_VAR>      Override package ID env var name
 ```
 
@@ -101,6 +101,7 @@ Generated code reads these environment variables at runtime:
 | `vector<u8>` | `Uint8Array` | `tx.pure('vector<u8>', v)` |
 | `vector<T>` | `MappedT[]` | `tx.pure.vector('innerType', v)` |
 | `Option<T>` | `MappedT \| null` | `tx.pure.option('innerType', v)` |
+| `struct (copy+drop)` | `{ field1: type1, ... }` | `tx.pure(bcs.struct(...).serialize(v))` |
 | `Coin<T>` / `Balance<T>` (by ref) | `TransactionObjectInput` | `tx.object(v)` |
 | `&T` / `&mut T` (object) | `TransactionObjectInput` | `tx.object(v)` |
 
@@ -198,6 +199,8 @@ Key points in the generated code:
 - **Singleton parameters are optional.** If a struct is only ever constructed inside `init()`, the corresponding parameter becomes optional with a `?` suffix. When omitted, the generated code falls back to the env var.
 - **Clock and Random are auto-injected.** Move functions that accept `&Clock` or `&Random` have those parameters stripped from the TypeScript signature; the generated code passes `tx.object.clock()` or `tx.object.random()` automatically.
 - **All functions return `TransactionResult`.** This enables composability -- callers can destructure results and pass them to subsequent transaction commands.
+
+When a function parameter is a pure value struct (has `copy` and `drop` abilities but no `key`), the generated code imports `bcs` from `@mysten/bcs` and serializes the struct using BCS encoding instead of `tx.object()`.
 
 A shared `move2ts-errors.ts` file is also generated with the `Move2TsConfigError` class. Address validation uses `isValidSuiAddress` from `@mysten/sui/utils`.
 

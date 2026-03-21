@@ -2,10 +2,10 @@ use std::fs;
 use std::process::Command;
 
 use move2ts::analyzer::extract_modules;
-use move2ts::codegen::{generate_errors_module, generate_module, CodegenConfig};
+use move2ts::codegen::{CodegenConfig, generate_errors_module, generate_module};
 use move2ts::parser::MoveParser;
 
-fn parse_and_extract(source: &str) -> Vec<move2ts::analyzer::ModuleInfo> {
+fn parse_and_extract(source: &str) -> Vec<move2ts::ir::ModuleInfo> {
     let parser = MoveParser::new();
     let defs = parser.parse_source(source).expect("should parse");
     extract_modules(&defs)

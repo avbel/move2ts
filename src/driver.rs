@@ -281,10 +281,7 @@ version = "0.1.0"
 
     #[test]
     fn parses_singleton_overrides_valid() {
-        let input = Some(vec![
-            "Marketplace".to_string(),
-            "AdminCap".to_string(),
-        ]);
+        let input = Some(vec!["Marketplace".to_string(), "AdminCap".to_string()]);
         let result = parse_singleton_overrides(&input).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], "Marketplace");
