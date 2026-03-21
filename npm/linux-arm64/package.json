@@ -3,9 +3,17 @@
   "version": "0.0.0",
   "description": "move2ts binary for linux-arm64",
   "license": "MIT",
-  "os": ["linux"],
-  "cpu": ["arm64"],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
   "publishConfig": {
     "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avbel/move2ts"
   }
 }

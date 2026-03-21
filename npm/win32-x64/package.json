@@ -3,9 +3,17 @@
   "version": "0.0.0",
   "description": "move2ts binary for win32-x64",
   "license": "MIT",
-  "os": ["win32"],
-  "cpu": ["x64"],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
   "publishConfig": {
     "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avbel/move2ts"
   }
 }
