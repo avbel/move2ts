@@ -159,7 +159,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          ROOT="$PWD"
           for pkg in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do
-            cd npm/$pkg && pnpm publish --access public --no-git-checks --provenance && cd ../..
+            cd "$ROOT/npm/$pkg" && pnpm publish --access public --no-git-checks --provenance
           done
-          cd npm/move2ts && pnpm publish --access public --no-git-checks --provenance
+          cd "$ROOT/npm/move2ts" && pnpm publish --access public --no-git-checks --provenance
