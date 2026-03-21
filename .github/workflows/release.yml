@@ -132,7 +132,7 @@ jobs:
           LINUX_X64=$(grep 'move2ts-linux-x64.tar.gz' checksums-sha256.txt | awk '{print $1}')
           LINUX_ARM64=$(grep 'move2ts-linux-arm64.tar.gz' checksums-sha256.txt | awk '{print $1}')
 
-          gh repo clone avbel/homebrew-tap /tmp/homebrew-tap
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/avbel/homebrew-tap.git" /tmp/homebrew-tap
 
           sed -i "s/version \".*\"/version \"$VERSION\"/" /tmp/homebrew-tap/Formula/move2ts.rb
 
