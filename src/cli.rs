@@ -29,4 +29,8 @@ pub struct Cli {
     /// Override package ID env var name
     #[arg(long)]
     pub package_id_name: Option<String>,
+
+    /// Include event type definitions in output
+    #[arg(long)]
+    pub events: bool,
 }

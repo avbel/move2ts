@@ -8,6 +8,7 @@ use crate::ir::{FunctionInfo, ModuleInfo, MoveType, StructInfo};
 pub struct CodegenConfig {
     pub package_id_env_var: String,
     pub project_name: String,
+    pub include_events: bool,
 }
 
 /// Simple code writer with indentation support.
@@ -266,7 +267,44 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
         w.blank();
     }
 
+    // --- Event types (only when --events is enabled) ---
+    if config.include_events {
+        generate_event_types(&mut w, module, &referenced_structs);
+    }
+
     w.into_string()
+}
+
+/// Generates `export type` declarations for event structs.
+/// Events are copy+drop structs NOT used as function parameters.
+/// All fields are typed as `string` (event data from RPC/indexers is string-serialized).
+fn generate_event_types(
+    w: &mut CodeWriter,
+    module: &ModuleInfo,
+    referenced_structs: &HashSet<String>,
+) {
+    let events: Vec<&StructInfo> = module
+        .structs
+        .iter()
+        .filter(|s| s.is_pure_value() && !referenced_structs.contains(&s.name))
+        .collect();
+
+    if events.is_empty() {
+        return;
+    }
+
+    w.line("// --- Event Types ---");
+    w.blank();
+    for event in events {
+        w.line(&format!("export type {} = {{", event.name));
+        w.indent();
+        for (field_name, _) in &event.fields {
+            w.line(&format!("{}: string;", to_camel_case(field_name)));
+        }
+        w.dedent();
+        w.line("};");
+        w.blank();
+    }
 }
 
 /// Generates the `move2ts-errors.ts` module content.
@@ -784,6 +822,7 @@ mod tests {
         let config = CodegenConfig {
             package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
             project_name: "my_project".to_string(),
+            include_events: false,
         };
 
         let output = generate_module(&module, &config);
@@ -828,6 +867,7 @@ mod tests {
         let config = CodegenConfig {
             package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
             project_name: "my_project".to_string(),
+            include_events: false,
         };
 
         let output = generate_module(&module, &config);
@@ -874,6 +914,7 @@ mod tests {
         let config = CodegenConfig {
             package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
             project_name: "my_project".to_string(),
+            include_events: false,
         };
 
         let output = generate_module(&module, &config);
@@ -911,6 +952,7 @@ mod tests {
         let config = CodegenConfig {
             package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
             project_name: "my_project".to_string(),
+            include_events: false,
         };
 
         let output = generate_module(&module, &config);
@@ -957,6 +999,7 @@ mod tests {
         let config = CodegenConfig {
             package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
             project_name: "my_project".to_string(),
+            include_events: false,
         };
 
         let output = generate_module(&module, &config);
@@ -995,6 +1038,7 @@ mod tests {
         let config = CodegenConfig {
             package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
             project_name: "my_project".to_string(),
+            include_events: false,
         };
 
         let output = generate_module(&module, &config);
@@ -1020,6 +1064,7 @@ mod tests {
         let config = CodegenConfig {
             package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
             project_name: "my_project".to_string(),
+            include_events: false,
         };
 
         let output = generate_module(&module, &config);
@@ -1166,6 +1211,7 @@ mod tests {
         let config = CodegenConfig {
             package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
             project_name: "my_project".to_string(),
+            include_events: false,
         };
 
         let output = generate_module(&module, &config);
@@ -1210,9 +1256,167 @@ mod tests {
         let config = CodegenConfig {
             package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
             project_name: "my_project".to_string(),
+            include_events: false,
         };
 
         let output = generate_module(&module, &config);
         assert!(!output.contains("@mysten/bcs"), "should NOT import bcs when no pure structs");
+    }
+
+    // ---- Event type generation tests ----
+
+    #[test]
+    fn generates_event_types_when_enabled() {
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![],
+            structs: vec![
+                StructInfo {
+                    name: "ItemPurchased".to_string(),
+                    fields: vec![
+                        ("buyer".to_string(), MoveType::Address),
+                        ("price".to_string(), MoveType::U64),
+                        ("item_id".to_string(), MoveType::Address),
+                    ],
+                    has_key: false,
+                    has_copy: true,
+                    has_drop: true,
+                },
+            ],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: true,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(output.contains("// --- Event Types ---"));
+        assert!(output.contains("export type ItemPurchased = {"));
+        assert!(output.contains("buyer: string;"));
+        assert!(output.contains("price: string;"));
+        assert!(output.contains("itemId: string;"));
+    }
+
+    #[test]
+    fn no_event_types_when_disabled() {
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![],
+            structs: vec![
+                StructInfo {
+                    name: "ItemPurchased".to_string(),
+                    fields: vec![
+                        ("buyer".to_string(), MoveType::Address),
+                    ],
+                    has_key: false,
+                    has_copy: true,
+                    has_drop: true,
+                },
+            ],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(!output.contains("Event Types"));
+        assert!(!output.contains("export type ItemPurchased"));
+    }
+
+    #[test]
+    fn event_excludes_structs_used_as_params() {
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "search".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "range".to_string(),
+                    move_type: MoveType::Struct {
+                        module: None,
+                        name: "PriceRange".to_string(),
+                        type_args: vec![],
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![
+                // PriceRange is used as a function param — should NOT be an event
+                StructInfo {
+                    name: "PriceRange".to_string(),
+                    fields: vec![
+                        ("min_price".to_string(), MoveType::U64),
+                        ("max_price".to_string(), MoveType::U64),
+                    ],
+                    has_key: false,
+                    has_copy: true,
+                    has_drop: true,
+                },
+                // ItemPurchased is NOT used as a param — IS an event
+                StructInfo {
+                    name: "ItemPurchased".to_string(),
+                    fields: vec![
+                        ("buyer".to_string(), MoveType::Address),
+                        ("price".to_string(), MoveType::U64),
+                    ],
+                    has_key: false,
+                    has_copy: true,
+                    has_drop: true,
+                },
+            ],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: true,
+        };
+
+        let output = generate_module(&module, &config);
+        // ItemPurchased should appear as event type
+        assert!(output.contains("export type ItemPurchased = {"));
+        // PriceRange should NOT appear as event type (it's a function param)
+        assert!(!output.contains("export type PriceRange"));
+        // PriceRange should appear as BCS interface instead
+        assert!(output.contains("export interface PriceRange {"));
+    }
+
+    #[test]
+    fn event_excludes_key_structs() {
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![],
+            structs: vec![
+                StructInfo {
+                    name: "Marketplace".to_string(),
+                    fields: vec![],
+                    has_key: true,
+                    has_copy: false,
+                    has_drop: false,
+                },
+            ],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: true,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(!output.contains("export type Marketplace"));
+        assert!(!output.contains("Event Types"));
     }
 }

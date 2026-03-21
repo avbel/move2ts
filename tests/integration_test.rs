@@ -67,6 +67,7 @@ fn full_pipeline_marketplace() {
     let config = CodegenConfig {
         package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
         project_name: "my_project".to_string(),
+            include_events: false,
     };
     let ts_output = generate_module(module, &config);
 
@@ -121,6 +122,7 @@ fn full_pipeline_defi_generics() {
     let config = CodegenConfig {
         package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
         project_name: "my_project".to_string(),
+            include_events: false,
     };
     let ts_output = generate_module(module, &config);
 
@@ -215,6 +217,7 @@ fn full_pipeline_pure_structs() {
     let codegen_config = CodegenConfig {
         package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
         project_name: "my_project".to_string(),
+            include_events: false,
     };
     let ts_output = generate_module(module, &codegen_config);
 
@@ -271,6 +274,68 @@ fn full_pipeline_pure_structs() {
 }
 
 #[test]
+fn full_pipeline_events() {
+    let source = fs::read_to_string("tests/fixtures/events.move").expect("fixture exists");
+    let modules = parse_and_extract(&source);
+
+    assert_eq!(modules.len(), 1);
+    let module = &modules[0];
+    assert_eq!(module.name, "marketplace_events");
+
+    // ItemPurchased, ListingCreated, FeeCollected should be copy+drop (events)
+    // PriceRange is also copy+drop but used as function param (not an event)
+    let item_purchased = module.structs.iter().find(|s| s.name == "ItemPurchased").unwrap();
+    assert!(item_purchased.is_pure_value());
+
+    let price_range = module.structs.iter().find(|s| s.name == "PriceRange").unwrap();
+    assert!(price_range.is_pure_value());
+
+    // Generate with events enabled
+    let config = CodegenConfig {
+        package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+        project_name: "my_project".to_string(),
+        include_events: true,
+    };
+    let ts_output = generate_module(module, &config);
+
+    // Event types should appear
+    assert!(ts_output.contains("// --- Event Types ---"));
+    assert!(ts_output.contains("export type ItemPurchased = {"));
+    assert!(ts_output.contains("export type ListingCreated = {"));
+    assert!(ts_output.contains("export type FeeCollected = {"));
+
+    // All event fields should be string
+    assert!(ts_output.contains("buyer: string;"));
+    assert!(ts_output.contains("seller: string;"));
+    assert!(ts_output.contains("price: string;"));
+    assert!(ts_output.contains("itemId: string;"));
+    assert!(ts_output.contains("listingId: string;"));
+    assert!(ts_output.contains("amount: string;"));
+    assert!(ts_output.contains("recipient: string;"));
+
+    // PriceRange is used as function param — should NOT be an event type
+    assert!(
+        !ts_output.contains("export type PriceRange"),
+        "PriceRange is a function param, not an event"
+    );
+    // PriceRange should appear as BCS interface instead
+    assert!(ts_output.contains("export interface PriceRange {"));
+
+    // Marketplace (key struct) should NOT be an event
+    assert!(!ts_output.contains("export type Marketplace"));
+
+    // Without --events, no event types
+    let config_no_events = CodegenConfig {
+        package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+        project_name: "my_project".to_string(),
+        include_events: false,
+    };
+    let ts_no_events = generate_module(module, &config_no_events);
+    assert!(!ts_no_events.contains("Event Types"));
+    assert!(!ts_no_events.contains("export type ItemPurchased"));
+}
+
+#[test]
 fn errors_module_generates_valid_content() {
     let output = generate_errors_module();
     assert!(output.contains("export class Move2TsConfigError extends Error"));
@@ -300,6 +365,7 @@ fn generated_ts_compiles_with_tsc() {
     let config = CodegenConfig {
         package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
         project_name: "my_project".to_string(),
+            include_events: false,
     };
 
     // Marketplace module
@@ -330,6 +396,21 @@ fn generated_ts_compiles_with_tsc() {
         generate_module(&pure_modules[0], &config),
     )
     .expect("write config.ts");
+
+    // Events module (with --events enabled)
+    let events_config = CodegenConfig {
+        package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+        project_name: "my_project".to_string(),
+        include_events: true,
+    };
+    let events_source =
+        fs::read_to_string("tests/fixtures/events.move").expect("fixture exists");
+    let events_modules = parse_and_extract(&events_source);
+    fs::write(
+        generated_dir.join("marketplace_events.ts"),
+        generate_module(&events_modules[0], &events_config),
+    )
+    .expect("write marketplace_events.ts");
 
     // Shared errors module
     fs::write(

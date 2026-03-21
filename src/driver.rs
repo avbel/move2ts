@@ -139,6 +139,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         let config = CodegenConfig {
             package_id_env_var: package_id_env_var.clone(),
             project_name: project_name.clone(),
+            include_events: cli.events,
         };
 
         let ts_content = generate_module(module, &config);
