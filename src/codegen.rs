@@ -281,6 +281,12 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     }
     w.blank();
 
+    // --- Event types (only when --events is enabled, placed after imports) ---
+    let referenced_structs = collect_referenced_structs(module);
+    if config.include_events {
+        generate_event_types(&mut w, module, &referenced_structs);
+    }
+
     // --- Package ID lazy getter ---
     generate_package_id_getter(&mut w, &config.package_id_env_var);
     w.blank();
@@ -292,7 +298,6 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     }
 
     // --- Struct interfaces (only for structs referenced in function params) ---
-    let referenced_structs = collect_referenced_structs(module);
     for struct_info in &module.structs {
         if referenced_structs.contains(&struct_info.name) {
             generate_struct_interface(&mut w, struct_info);
@@ -306,11 +311,6 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
         w.blank();
     }
 
-    // --- Event types (only when --events is enabled) ---
-    if config.include_events {
-        generate_event_types(&mut w, module);
-    }
-
     w.into_string()
 }
 
@@ -319,7 +319,11 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
 /// All fields are typed as `string` (event data from RPC/indexers is string-serialized).
 /// If a struct is both emitted AND used as a function param, the event type gets an `Event` suffix
 /// (the param version already has an `export interface` with proper Move type mapping).
-fn generate_event_types(w: &mut CodeWriter, module: &ModuleInfo) {
+fn generate_event_types(
+    w: &mut CodeWriter,
+    module: &ModuleInfo,
+    referenced: &HashSet<String>,
+) {
     let events: Vec<&StructInfo> = module
         .structs
         .iter()
@@ -329,8 +333,6 @@ fn generate_event_types(w: &mut CodeWriter, module: &ModuleInfo) {
     if events.is_empty() {
         return;
     }
-
-    let referenced = collect_referenced_structs(module);
 
     w.line("// --- Event Types ---");
     w.blank();
