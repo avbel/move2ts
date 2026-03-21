@@ -13,6 +13,26 @@
     "@move2ts/darwin-arm64": "0.0.0",
     "@move2ts/win32-x64": "0.0.0"
   },
+  "keywords": [
+    "sui",
+    "move",
+    "typescript",
+    "sdk",
+    "codegen",
+    "sui-move",
+    "code-generator",
+    "blockchain",
+    "web3",
+    "smart-contracts",
+    "move-language",
+    "sui-network",
+    "developer-tools",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avbel/move2ts"
+  },
   "publishConfig": {
     "access": "public"
   }
