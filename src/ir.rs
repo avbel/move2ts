@@ -21,7 +21,10 @@ pub enum MoveType {
         inner: Box<MoveType>,
         is_mut: bool,
     },
-    TypeParam(String),
+    TypeParam {
+        name: String,
+        has_key: bool,
+    },
     Struct {
         module: std::option::Option<String>,
         name: String,
@@ -89,12 +92,18 @@ pub struct ModuleInfo {
     pub emitted_events: HashSet<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeParamInfo {
+    pub name: String,
+    pub has_key: bool,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct FunctionInfo {
     pub name: String,
     pub is_entry: bool,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParamInfo>,
     pub params: Vec<ParamInfo>,
     pub has_clock_param: bool,
     pub has_random_param: bool,

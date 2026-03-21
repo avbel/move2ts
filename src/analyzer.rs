@@ -78,8 +78,8 @@ pub fn filter_functions(
 // ============================================================================
 
 /// Converts a move-compiler `Type_` AST node into our `MoveType` IR.
-/// `type_param_names` is the set of generic type parameter names in scope.
-fn convert_type(ty: &Type, type_param_names: &HashSet<String>) -> MoveType {
+/// `type_param_names` maps each generic type parameter name to whether it has the `key` ability.
+fn convert_type(ty: &Type, type_param_names: &HashMap<String, bool>) -> MoveType {
     match &ty.value {
         Type_::Unit => MoveType::Unit,
         Type_::Ref(is_mut, inner) => MoveType::Ref {
@@ -96,7 +96,7 @@ fn convert_type(ty: &Type, type_param_names: &HashSet<String>) -> MoveType {
 /// Converts a `Type_::Apply(NameAccessChain)` into a `MoveType`.
 fn convert_apply_type(
     chain: &move_compiler::parser::ast::NameAccessChain,
-    type_param_names: &HashSet<String>,
+    type_param_names: &HashMap<String, bool>,
 ) -> MoveType {
     match &chain.value {
         NameAccessChain_::Single(entry) => {
@@ -205,7 +205,7 @@ fn convert_apply_type(
 fn convert_single_name(
     name: &str,
     tyargs: &[MoveType],
-    type_param_names: &HashSet<String>,
+    type_param_names: &HashMap<String, bool>,
 ) -> MoveType {
     match name {
         "u8" => MoveType::U8,
@@ -228,8 +228,11 @@ fn convert_single_name(
         "ID" => MoveType::ObjectId,
         _ => {
             // Check if it's a type parameter
-            if type_param_names.contains(name) {
-                MoveType::TypeParam(name.to_string())
+            if let Some(&has_key) = type_param_names.get(name) {
+                MoveType::TypeParam {
+                    name: name.to_string(),
+                    has_key,
+                }
             } else {
                 MoveType::Struct {
                     module: None,
@@ -536,11 +539,15 @@ fn extract_structs(module_def: &ModuleDefinition) -> Vec<StructInfo> {
                 .iter()
                 .any(|a| a.value == Ability_::Drop);
 
-            // Build type param names for this struct
-            let type_param_names: HashSet<String> = struct_def
+            // Build type param names for this struct (name → has_key)
+            let type_param_names: HashMap<String, bool> = struct_def
                 .type_parameters
                 .iter()
-                .map(|tp| tp.name.value.as_str().to_string())
+                .map(|tp| {
+                    let name = tp.name.value.as_str().to_string();
+                    let has_key = tp.constraints.iter().any(|a| a.value == Ability_::Key);
+                    (name, has_key)
+                })
                 .collect();
 
             let fields = match &struct_def.fields {
@@ -631,16 +638,22 @@ fn extract_functions(
 
             let func_name = func.name.0.value.as_str().to_string();
 
-            // Extract type parameters
-            let type_params: Vec<String> = func
+            // Extract type parameters with constraints
+            let type_params: Vec<TypeParamInfo> = func
                 .signature
                 .type_parameters
                 .iter()
-                .map(|(name, _abilities)| name.value.as_str().to_string())
+                .map(|(name, abilities)| TypeParamInfo {
+                    name: name.value.as_str().to_string(),
+                    has_key: abilities.iter().any(|a| a.value == Ability_::Key),
+                })
                 .collect();
 
-            // Build type param name set for type conversion
-            let type_param_names: HashSet<String> = type_params.iter().cloned().collect();
+            // Build type param name map for type conversion (name → has_key)
+            let type_param_names: HashMap<String, bool> = type_params
+                .iter()
+                .map(|tp| (tp.name.clone(), tp.has_key))
+                .collect();
 
             // Extract parameters
             let raw_params: Vec<ParamInfo> = func
@@ -1165,7 +1178,10 @@ mod tests {
         let coin_sui = MoveType::Struct {
             module: Some("coin".to_string()),
             name: "Coin".to_string(),
-            type_args: vec![MoveType::TypeParam("T".to_string())],
+            type_args: vec![MoveType::TypeParam {
+                name: "T".to_string(),
+                has_key: false,
+            }],
         };
         match &coin_sui {
             MoveType::Struct {
@@ -1173,7 +1189,13 @@ mod tests {
             } => {
                 assert_eq!(name, "Coin");
                 assert_eq!(type_args.len(), 1);
-                assert_eq!(type_args[0], MoveType::TypeParam("T".to_string()));
+                assert_eq!(
+                    type_args[0],
+                    MoveType::TypeParam {
+                        name: "T".to_string(),
+                        has_key: false
+                    }
+                );
             }
             other => panic!("expected Struct, got {other:?}"),
         }
@@ -1348,7 +1370,13 @@ module test_pkg::generic_mod {
 
         let func = &modules[0].functions[0];
         assert_eq!(func.name, "withdraw");
-        assert_eq!(func.type_params, vec!["T".to_string()]);
+        assert_eq!(
+            func.type_params,
+            vec![TypeParamInfo {
+                name: "T".to_string(),
+                has_key: false
+            }]
+        );
         // TxContext stripped
         assert_eq!(func.params.len(), 2);
         assert_eq!(func.params[0].name, "pool");

@@ -75,7 +75,13 @@ pub fn to_ts_type(ty: &MoveType) -> String {
         }
         MoveType::Option(inner) => format!("{} | null", to_ts_type(inner)),
         MoveType::Ref { .. } => "TransactionObjectInput".to_string(),
-        MoveType::TypeParam(_) => "string".to_string(), // type args are always string
+        MoveType::TypeParam { has_key, .. } => {
+            if *has_key {
+                "TransactionObjectInput".to_string()
+            } else {
+                "string".to_string()
+            }
+        }
         MoveType::Struct { name, .. } => name.clone(),
         MoveType::Unit => "void".to_string(),
     }
@@ -106,7 +112,13 @@ pub fn to_tx_encoding(ty: &MoveType, expr: &str) -> String {
             format!("tx.pure.option('{inner_bcs}', {expr})")
         }
         MoveType::Ref { .. } => format!("tx.object({expr})"),
-        MoveType::TypeParam(_) => format!("tx.pure({expr})"), // fallback for generic
+        MoveType::TypeParam { has_key, .. } => {
+            if *has_key {
+                format!("tx.object({expr})")
+            } else {
+                format!("tx.pure({expr})")
+            }
+        }
         MoveType::Struct { .. } => format!("tx.object({expr})"), // assume object
         MoveType::Unit => String::new(),
     }
@@ -463,7 +475,7 @@ fn generate_function_wrapper(
 
     // Type params
     for tp in &func.type_params {
-        let ts_param_name = format!("type{}", tp.to_case(Case::Pascal));
+        let ts_param_name = format!("type{}", tp.name.to_case(Case::Pascal));
         arg_entries.push(format!("{ts_param_name}: string;"));
     }
 
@@ -535,7 +547,7 @@ fn generate_function_wrapper(
         .type_params
         .iter()
         .map(|tp| {
-            let ts_param_name = format!("type{}", tp.to_case(Case::Pascal));
+            let ts_param_name = format!("type{}", tp.name.to_case(Case::Pascal));
             format!("args.{ts_param_name}")
         })
         .collect();
@@ -571,7 +583,7 @@ fn generate_function_wrapper(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ParamInfo;
+    use crate::ir::{ParamInfo, TypeParamInfo};
 
     // ---- to_ts_type tests ----
 
@@ -660,9 +672,40 @@ mod tests {
     }
 
     #[test]
-    fn type_param_maps_to_string() {
-        let ty = MoveType::TypeParam("T".to_string());
+    fn type_param_without_key_maps_to_string() {
+        let ty = MoveType::TypeParam {
+            name: "T".to_string(),
+            has_key: false,
+        };
         assert_eq!(to_ts_type(&ty), "string");
+    }
+
+    #[test]
+    fn type_param_with_key_maps_to_transaction_object_input() {
+        // T: key + store should use TransactionObjectInput (it's an object)
+        let ty = MoveType::TypeParam {
+            name: "T".to_string(),
+            has_key: true,
+        };
+        assert_eq!(to_ts_type(&ty), "TransactionObjectInput");
+    }
+
+    #[test]
+    fn type_param_with_key_uses_tx_object() {
+        let ty = MoveType::TypeParam {
+            name: "T".to_string(),
+            has_key: true,
+        };
+        assert_eq!(to_tx_encoding(&ty, "args.nft"), "tx.object(args.nft)");
+    }
+
+    #[test]
+    fn type_param_without_key_uses_tx_pure() {
+        let ty = MoveType::TypeParam {
+            name: "T".to_string(),
+            has_key: false,
+        };
+        assert_eq!(to_tx_encoding(&ty, "args.value"), "tx.pure(args.value)");
     }
 
     // ---- to_tx_encoding tests ----
@@ -893,7 +936,10 @@ mod tests {
             functions: vec![FunctionInfo {
                 name: "withdraw".to_string(),
                 is_entry: false,
-                type_params: vec!["T".to_string()],
+                type_params: vec![TypeParamInfo {
+                    name: "T".to_string(),
+                    has_key: false,
+                }],
                 params: vec![
                     ParamInfo {
                         name: "pool_id".to_string(),
@@ -901,7 +947,10 @@ mod tests {
                             inner: Box::new(MoveType::Struct {
                                 module: None,
                                 name: "Pool".to_string(),
-                                type_args: vec![MoveType::TypeParam("T".to_string())],
+                                type_args: vec![MoveType::TypeParam {
+                                    name: "T".to_string(),
+                                    has_key: false,
+                                }],
                             }),
                             is_mut: true,
                         },

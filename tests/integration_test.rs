@@ -3,6 +3,7 @@ use std::process::Command;
 
 use move2ts::analyzer::extract_modules;
 use move2ts::codegen::{CodegenConfig, generate_errors_module, generate_module};
+use move2ts::ir::TypeParamInfo;
 use move2ts::parser::MoveParser;
 
 fn parse_and_extract(source: &str) -> Vec<move2ts::ir::ModuleInfo> {
@@ -99,7 +100,19 @@ fn full_pipeline_defi_generics() {
         .iter()
         .find(|f| f.name == "swap")
         .expect("swap exists");
-    assert_eq!(swap.type_params, vec!["X", "Y"]);
+    assert_eq!(
+        swap.type_params,
+        vec![
+            TypeParamInfo {
+                name: "X".to_string(),
+                has_key: false
+            },
+            TypeParamInfo {
+                name: "Y".to_string(),
+                has_key: false
+            },
+        ]
+    );
 
     // withdraw should have 1 type param
     let withdraw = module
@@ -107,7 +120,13 @@ fn full_pipeline_defi_generics() {
         .iter()
         .find(|f| f.name == "withdraw")
         .expect("withdraw exists");
-    assert_eq!(withdraw.type_params, vec!["T"]);
+    assert_eq!(
+        withdraw.type_params,
+        vec![TypeParamInfo {
+            name: "T".to_string(),
+            has_key: false
+        }]
+    );
 
     // get_random_reward should have both clock and random
     let random_reward = module
