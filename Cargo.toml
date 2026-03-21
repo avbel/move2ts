@@ -1,0 +1,21 @@
+[package]
+name = "move2ts"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+convert_case = "0.7"
+
+# Move compiler crates — git dep pinned to Sui release tag
+# To update Move version: change rev to new commit/tag
+move-compiler = { git = "https://github.com/MystenLabs/sui.git", rev = "a8b4775b33" }
+move-ir-types = { git = "https://github.com/MystenLabs/sui.git", rev = "a8b4775b33" }
+move-symbol-pool = { git = "https://github.com/MystenLabs/sui.git", rev = "a8b4775b33" }
+move-command-line-common = { git = "https://github.com/MystenLabs/sui.git", rev = "a8b4775b33" }
+move-core-types = { git = "https://github.com/MystenLabs/sui.git", rev = "a8b4775b33" }
+
+[dev-dependencies]
+insta = "1"
+tempfile = "3"

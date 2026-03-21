@@ -1,0 +1,11 @@
+{
+  "name": "@move2ts/darwin-x64",
+  "version": "0.0.0",
+  "description": "move2ts binary for darwin-x64",
+  "license": "MIT",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,935 @@
+use std::collections::HashSet;
+
+use convert_case::{Case, Casing};
+
+use crate::analyzer::{FunctionInfo, ModuleInfo, MoveType, StructInfo};
+
+/// Configuration for code generation.
+pub struct CodegenConfig {
+    pub package_id_env_var: String,
+    pub project_name: String,
+}
+
+/// Simple code writer with indentation support.
+struct CodeWriter {
+    buffer: String,
+    indent: usize,
+}
+
+impl CodeWriter {
+    fn new() -> Self {
+        Self {
+            buffer: String::with_capacity(16 * 1024),
+            indent: 0,
+        }
+    }
+
+    fn line(&mut self, content: &str) {
+        if content.is_empty() {
+            self.buffer.push('\n');
+        } else {
+            for _ in 0..self.indent {
+                self.buffer.push_str("  ");
+            }
+            self.buffer.push_str(content);
+            self.buffer.push('\n');
+        }
+    }
+
+    fn indent(&mut self) {
+        self.indent += 1;
+    }
+
+    fn dedent(&mut self) {
+        self.indent = self.indent.saturating_sub(1);
+    }
+
+    fn blank(&mut self) {
+        self.buffer.push('\n');
+    }
+
+    fn into_string(self) -> String {
+        self.buffer
+    }
+}
+
+/// Maps a MoveType to its TypeScript type string.
+pub fn to_ts_type(ty: &MoveType) -> String {
+    match ty {
+        MoveType::U8 | MoveType::U16 | MoveType::U32 => "number".to_string(),
+        MoveType::U64 | MoveType::U128 | MoveType::U256 => "bigint".to_string(),
+        MoveType::Bool => "boolean".to_string(),
+        MoveType::Address => "string".to_string(),
+        MoveType::SuiString => "string".to_string(),
+        MoveType::ObjectId => "string".to_string(),
+        MoveType::Vector(inner) if **inner == MoveType::U8 => "Uint8Array".to_string(),
+        MoveType::Vector(inner) => {
+            let inner_ts = to_ts_type(inner);
+            // Wrap union types in parens when used as array element
+            if inner_ts.contains(" | ") {
+                format!("({inner_ts})[]")
+            } else {
+                format!("{inner_ts}[]")
+            }
+        }
+        MoveType::Option(inner) => format!("{} | null", to_ts_type(inner)),
+        MoveType::Ref { .. } => "TransactionObjectInput".to_string(),
+        MoveType::TypeParam(_) => "string".to_string(), // type args are always string
+        MoveType::Struct { name, .. } => name.clone(),
+        MoveType::Unit => "void".to_string(),
+    }
+}
+
+/// Maps a MoveType to its tx.pure.* or tx.object() encoding call.
+pub fn to_tx_encoding(ty: &MoveType, expr: &str) -> String {
+    match ty {
+        MoveType::U8 => format!("tx.pure.u8({expr})"),
+        MoveType::U16 => format!("tx.pure.u16({expr})"),
+        MoveType::U32 => format!("tx.pure.u32({expr})"),
+        MoveType::U64 => format!("tx.pure.u64({expr})"),
+        MoveType::U128 => format!("tx.pure.u128({expr})"),
+        MoveType::U256 => format!("tx.pure.u256({expr})"),
+        MoveType::Bool => format!("tx.pure.bool({expr})"),
+        MoveType::Address => format!("tx.pure.address({expr})"),
+        MoveType::SuiString => format!("tx.pure.string({expr})"),
+        MoveType::ObjectId => format!("tx.pure.id({expr})"),
+        MoveType::Vector(inner) if **inner == MoveType::U8 => {
+            format!("tx.pure('vector<u8>', {expr})")
+        }
+        MoveType::Vector(inner) => {
+            let inner_bcs = to_bcs_type_string(inner);
+            format!("tx.pure.vector('{inner_bcs}', {expr})")
+        }
+        MoveType::Option(inner) => {
+            let inner_bcs = to_bcs_type_string(inner);
+            format!("tx.pure.option('{inner_bcs}', {expr})")
+        }
+        MoveType::Ref { .. } => format!("tx.object({expr})"),
+        MoveType::TypeParam(_) => format!("tx.pure({expr})"), // fallback for generic
+        MoveType::Struct { .. } => format!("tx.object({expr})"), // assume object
+        MoveType::Unit => String::new(),
+    }
+}
+
+/// Produces the BCS type string for nested pure encoding (e.g., 'vector<u64>', 'option<address>').
+fn to_bcs_type_string(ty: &MoveType) -> String {
+    match ty {
+        MoveType::U8 => "u8".to_string(),
+        MoveType::U16 => "u16".to_string(),
+        MoveType::U32 => "u32".to_string(),
+        MoveType::U64 => "u64".to_string(),
+        MoveType::U128 => "u128".to_string(),
+        MoveType::U256 => "u256".to_string(),
+        MoveType::Bool => "bool".to_string(),
+        MoveType::Address => "address".to_string(),
+        MoveType::SuiString => "string".to_string(),
+        MoveType::ObjectId => "address".to_string(),
+        MoveType::Vector(inner) => format!("vector<{}>", to_bcs_type_string(inner)),
+        MoveType::Option(inner) => format!("option<{}>", to_bcs_type_string(inner)),
+        _ => "u8".to_string(), // fallback
+    }
+}
+
+/// Converts a Move snake_case name to TypeScript camelCase.
+pub fn to_camel_case(name: &str) -> String {
+    name.to_case(Case::Camel)
+}
+
+/// Converts a name to UPPER_SNAKE_CASE for env var naming.
+pub fn to_env_var_name(name: &str) -> String {
+    name.to_case(Case::UpperSnake)
+}
+
+// ============================================================================
+// Full TS File Generation
+// ============================================================================
+
+/// Generates a complete TypeScript module file for a given `ModuleInfo`.
+pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
+    let mut w = CodeWriter::new();
+
+    // --- Imports ---
+    w.line("import process from 'node:process';");
+    w.line(
+        "import type { TransactionObjectInput, TransactionResult } from '@mysten/sui/transactions';",
+    );
+    w.line("import { Transaction } from '@mysten/sui/transactions';");
+    w.line("import { Move2TsConfigError, validateSuiAddress } from './move2ts-errors';");
+    w.blank();
+
+    // --- Package ID lazy getter ---
+    generate_package_id_getter(&mut w, &config.package_id_env_var);
+    w.blank();
+
+    // --- Singleton lazy getters ---
+    for singleton_name in &module.singletons {
+        generate_singleton_getter(&mut w, &config.project_name, singleton_name);
+        w.blank();
+    }
+
+    // --- Struct interfaces (only for structs referenced in function params) ---
+    let referenced_structs = collect_referenced_structs(module);
+    for struct_info in &module.structs {
+        if referenced_structs.contains(&struct_info.name) {
+            generate_struct_interface(&mut w, struct_info);
+            w.blank();
+        }
+    }
+
+    // --- Function wrappers ---
+    for (i, func) in module.functions.iter().enumerate() {
+        if i > 0 || !referenced_structs.is_empty() || !module.singletons.is_empty() {
+            // blank line between sections already handled
+        }
+        generate_function_wrapper(&mut w, func, &module.name, &module.singletons, config);
+        w.blank();
+    }
+
+    w.into_string()
+}
+
+/// Generates the `move2ts-errors.ts` module content.
+pub fn generate_errors_module() -> String {
+    let mut w = CodeWriter::new();
+
+    w.line("export class Move2TsConfigError extends Error {");
+    w.indent();
+    w.line("override readonly name = 'Move2TsConfigError' as const;");
+    w.line("constructor(message: string) {");
+    w.indent();
+    w.line("super(message);");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line("export function validateSuiAddress(value: string, name: string): string {");
+    w.indent();
+    w.line("if (!/^0x[0-9a-fA-F]{1,64}$/.test(value)) {");
+    w.indent();
+    w.line("throw new Move2TsConfigError(`${name} is not a valid Sui address: ${value}`);");
+    w.dedent();
+    w.line("}");
+    w.line("return value;");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.into_string()
+}
+
+/// Generates the package ID getter function.
+fn generate_package_id_getter(w: &mut CodeWriter, env_var_name: &str) {
+    w.line("function getPackageId(): string {");
+    w.indent();
+    w.line(&format!("const id = process.env.{env_var_name};"));
+    w.line("if (!id) {");
+    w.indent();
+    w.line(&format!(
+        "throw new Move2TsConfigError('{env_var_name} environment variable is not set');"
+    ));
+    w.dedent();
+    w.line("}");
+    w.line(&format!("return validateSuiAddress(id, '{env_var_name}');"));
+    w.dedent();
+    w.line("}");
+}
+
+/// Generates a singleton lazy getter function.
+fn generate_singleton_getter(w: &mut CodeWriter, project_name: &str, struct_name: &str) {
+    let env_var = format!(
+        "{}_{}",
+        to_env_var_name(project_name),
+        to_env_var_name(struct_name)
+    );
+    let getter_name = format!("get{}Id", struct_name);
+
+    w.line(&format!("function {getter_name}(): string {{"));
+    w.indent();
+    w.line(&format!("const id = process.env.{env_var};"));
+    w.line("if (!id) {");
+    w.indent();
+    w.line(&format!(
+        "throw new Move2TsConfigError('{env_var} environment variable is not set');"
+    ));
+    w.dedent();
+    w.line("}");
+    w.line(&format!("return validateSuiAddress(id, '{env_var}');"));
+    w.dedent();
+    w.line("}");
+}
+
+/// Generates a TypeScript interface for a Move struct.
+fn generate_struct_interface(w: &mut CodeWriter, struct_info: &StructInfo) {
+    w.line(&format!("export interface {} {{", struct_info.name));
+    w.indent();
+    for (field_name, field_type) in &struct_info.fields {
+        let ts_type = if field_name == "id" && struct_info.has_key {
+            "string".to_string()
+        } else {
+            to_ts_type(field_type)
+        };
+        w.line(&format!("{}: {};", to_camel_case(field_name), ts_type));
+    }
+    w.dedent();
+    w.line("}");
+}
+
+/// Collects the set of struct names that are referenced in function parameters.
+fn collect_referenced_structs(module: &ModuleInfo) -> HashSet<String> {
+    let mut referenced = HashSet::new();
+    let struct_names: HashSet<&str> = module.structs.iter().map(|s| s.name.as_str()).collect();
+
+    for func in &module.functions {
+        for param in &func.params {
+            collect_struct_refs_from_type(&param.move_type, &struct_names, &mut referenced);
+        }
+    }
+
+    referenced
+}
+
+/// Recursively collects struct names from a MoveType.
+fn collect_struct_refs_from_type(
+    ty: &MoveType,
+    struct_names: &HashSet<&str>,
+    referenced: &mut HashSet<String>,
+) {
+    match ty {
+        MoveType::Ref { inner, .. } => {
+            collect_struct_refs_from_type(inner, struct_names, referenced);
+        }
+        MoveType::Struct {
+            name, type_args, ..
+        } => {
+            if struct_names.contains(name.as_str()) {
+                referenced.insert(name.clone());
+            }
+            for ta in type_args {
+                collect_struct_refs_from_type(ta, struct_names, referenced);
+            }
+        }
+        MoveType::Vector(inner) => {
+            collect_struct_refs_from_type(inner, struct_names, referenced);
+        }
+        MoveType::Option(inner) => {
+            collect_struct_refs_from_type(inner, struct_names, referenced);
+        }
+        _ => {}
+    }
+}
+
+/// Generates a TypeScript function wrapper for a Move function.
+fn generate_function_wrapper(
+    w: &mut CodeWriter,
+    func: &FunctionInfo,
+    module_name: &str,
+    _singletons: &HashSet<String>,
+    _config: &CodegenConfig,
+) {
+    let ts_name = to_camel_case(&func.name);
+    let has_args = !func.params.is_empty() || !func.type_params.is_empty();
+
+    // Build args type entries
+    let mut arg_entries: Vec<String> = Vec::new();
+
+    // Type params
+    for tp in &func.type_params {
+        let ts_param_name = format!("type{}", tp.to_case(Case::Pascal));
+        arg_entries.push(format!("{ts_param_name}: string;"));
+    }
+
+    // Regular params
+    for param in &func.params {
+        let ts_param_name = to_camel_case(&param.name);
+        let ts_type = to_ts_type(&param.move_type);
+        let optional = if param.is_singleton { "?" } else { "" };
+        arg_entries.push(format!("{ts_param_name}{optional}: {ts_type};"));
+    }
+
+    // Function signature
+    if has_args {
+        w.line(&format!("export function {ts_name}("));
+        w.indent();
+        w.line("tx: Transaction,");
+        w.line("args: {");
+        w.indent();
+        for entry in &arg_entries {
+            w.line(entry);
+        }
+        w.dedent();
+        w.line("},");
+        w.dedent();
+        w.line("): TransactionResult {");
+    } else {
+        w.line(&format!(
+            "export function {ts_name}(tx: Transaction): TransactionResult {{"
+        ));
+    }
+
+    w.indent();
+
+    // Build moveCall arguments
+    let mut move_args: Vec<String> = Vec::new();
+
+    for param in &func.params {
+        let ts_param_name = to_camel_case(&param.name);
+        let expr = if param.is_singleton {
+            // Resolve singleton with fallback to getter
+            let struct_name = param.move_type.struct_name().unwrap_or(&param.name);
+            let getter_name = format!("get{struct_name}Id");
+            let full_expr = format!("args.{ts_param_name} ?? {getter_name}()");
+            to_tx_encoding(&param.move_type, &full_expr)
+        } else {
+            let accessor = format!("args.{ts_param_name}");
+            to_tx_encoding(&param.move_type, &accessor)
+        };
+        move_args.push(expr);
+    }
+
+    // Auto-inject Clock
+    if func.has_clock_param {
+        move_args.push("tx.object.clock()".to_string());
+    }
+
+    // Auto-inject Random
+    if func.has_random_param {
+        move_args.push("tx.object.random()".to_string());
+    }
+
+    // Build typeArguments
+    let type_args: Vec<String> = func
+        .type_params
+        .iter()
+        .map(|tp| {
+            let ts_param_name = format!("type{}", tp.to_case(Case::Pascal));
+            format!("args.{ts_param_name}")
+        })
+        .collect();
+
+    // Generate moveCall
+    w.line("return tx.moveCall({");
+    w.indent();
+    w.line(&format!(
+        "target: `${{getPackageId()}}::{module_name}::{}`,",
+        func.name
+    ));
+
+    if !type_args.is_empty() {
+        w.line(&format!("typeArguments: [{}],", type_args.join(", ")));
+    }
+
+    if !move_args.is_empty() {
+        w.line("arguments: [");
+        w.indent();
+        for arg in &move_args {
+            w.line(&format!("{arg},"));
+        }
+        w.dedent();
+        w.line("],");
+    }
+
+    w.dedent();
+    w.line("});");
+    w.dedent();
+    w.line("}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analyzer::ParamInfo;
+
+    // ---- to_ts_type tests ----
+
+    #[test]
+    fn primitives_map_correctly() {
+        assert_eq!(to_ts_type(&MoveType::U8), "number");
+        assert_eq!(to_ts_type(&MoveType::U16), "number");
+        assert_eq!(to_ts_type(&MoveType::U32), "number");
+        assert_eq!(to_ts_type(&MoveType::U64), "bigint");
+        assert_eq!(to_ts_type(&MoveType::U128), "bigint");
+        assert_eq!(to_ts_type(&MoveType::U256), "bigint");
+        assert_eq!(to_ts_type(&MoveType::Bool), "boolean");
+        assert_eq!(to_ts_type(&MoveType::Address), "string");
+    }
+
+    #[test]
+    fn sui_string_maps_to_string() {
+        assert_eq!(to_ts_type(&MoveType::SuiString), "string");
+    }
+
+    #[test]
+    fn object_id_maps_to_string() {
+        assert_eq!(to_ts_type(&MoveType::ObjectId), "string");
+    }
+
+    #[test]
+    fn vector_u8_maps_to_uint8array() {
+        let ty = MoveType::Vector(Box::new(MoveType::U8));
+        assert_eq!(to_ts_type(&ty), "Uint8Array");
+    }
+
+    #[test]
+    fn vector_u64_maps_to_bigint_array() {
+        let ty = MoveType::Vector(Box::new(MoveType::U64));
+        assert_eq!(to_ts_type(&ty), "bigint[]");
+    }
+
+    #[test]
+    fn vector_address_maps_to_string_array() {
+        let ty = MoveType::Vector(Box::new(MoveType::Address));
+        assert_eq!(to_ts_type(&ty), "string[]");
+    }
+
+    #[test]
+    fn option_u64_maps_to_nullable_bigint() {
+        let ty = MoveType::Option(Box::new(MoveType::U64));
+        assert_eq!(to_ts_type(&ty), "bigint | null");
+    }
+
+    #[test]
+    fn option_vector_u8_maps_to_nullable_uint8array() {
+        let ty = MoveType::Option(Box::new(MoveType::Vector(Box::new(MoveType::U8))));
+        assert_eq!(to_ts_type(&ty), "Uint8Array | null");
+    }
+
+    #[test]
+    fn option_vector_u64_maps_to_nullable_bigint_array() {
+        let ty = MoveType::Option(Box::new(MoveType::Vector(Box::new(MoveType::U64))));
+        assert_eq!(to_ts_type(&ty), "bigint[] | null");
+    }
+
+    #[test]
+    fn vector_option_address() {
+        let ty = MoveType::Vector(Box::new(MoveType::Option(Box::new(MoveType::Address))));
+        assert_eq!(to_ts_type(&ty), "(string | null)[]");
+    }
+
+    #[test]
+    fn nested_vector_vector_u8() {
+        // vector<vector<u8>> -> Uint8Array[]
+        let ty = MoveType::Vector(Box::new(MoveType::Vector(Box::new(MoveType::U8))));
+        assert_eq!(to_ts_type(&ty), "Uint8Array[]");
+    }
+
+    #[test]
+    fn object_ref_maps_to_transaction_object_input() {
+        let ty = MoveType::Ref {
+            inner: Box::new(MoveType::Struct {
+                module: None,
+                name: "Pool".to_string(),
+                type_args: vec![],
+            }),
+            is_mut: true,
+        };
+        assert_eq!(to_ts_type(&ty), "TransactionObjectInput");
+    }
+
+    #[test]
+    fn type_param_maps_to_string() {
+        let ty = MoveType::TypeParam("T".to_string());
+        assert_eq!(to_ts_type(&ty), "string");
+    }
+
+    // ---- to_tx_encoding tests ----
+
+    #[test]
+    fn u64_encoding() {
+        assert_eq!(
+            to_tx_encoding(&MoveType::U64, "args.price"),
+            "tx.pure.u64(args.price)"
+        );
+    }
+
+    #[test]
+    fn bool_encoding() {
+        assert_eq!(
+            to_tx_encoding(&MoveType::Bool, "args.active"),
+            "tx.pure.bool(args.active)"
+        );
+    }
+
+    #[test]
+    fn address_encoding() {
+        assert_eq!(
+            to_tx_encoding(&MoveType::Address, "args.recipient"),
+            "tx.pure.address(args.recipient)"
+        );
+    }
+
+    #[test]
+    fn string_encoding() {
+        assert_eq!(
+            to_tx_encoding(&MoveType::SuiString, "args.name"),
+            "tx.pure.string(args.name)"
+        );
+    }
+
+    #[test]
+    fn object_id_encoding() {
+        assert_eq!(
+            to_tx_encoding(&MoveType::ObjectId, "args.id"),
+            "tx.pure.id(args.id)"
+        );
+    }
+
+    #[test]
+    fn vector_u8_encoding() {
+        let ty = MoveType::Vector(Box::new(MoveType::U8));
+        assert_eq!(
+            to_tx_encoding(&ty, "args.data"),
+            "tx.pure('vector<u8>', args.data)"
+        );
+    }
+
+    #[test]
+    fn vector_u64_encoding() {
+        let ty = MoveType::Vector(Box::new(MoveType::U64));
+        assert_eq!(
+            to_tx_encoding(&ty, "args.amounts"),
+            "tx.pure.vector('u64', args.amounts)"
+        );
+    }
+
+    #[test]
+    fn option_u64_encoding() {
+        let ty = MoveType::Option(Box::new(MoveType::U64));
+        assert_eq!(
+            to_tx_encoding(&ty, "args.limit"),
+            "tx.pure.option('u64', args.limit)"
+        );
+    }
+
+    #[test]
+    fn option_vector_u8_encoding() {
+        let ty = MoveType::Option(Box::new(MoveType::Vector(Box::new(MoveType::U8))));
+        assert_eq!(
+            to_tx_encoding(&ty, "args.data"),
+            "tx.pure.option('vector<u8>', args.data)"
+        );
+    }
+
+    #[test]
+    fn object_ref_encoding() {
+        let ty = MoveType::Ref {
+            inner: Box::new(MoveType::Struct {
+                module: None,
+                name: "Pool".to_string(),
+                type_args: vec![],
+            }),
+            is_mut: true,
+        };
+        assert_eq!(to_tx_encoding(&ty, "args.poolId"), "tx.object(args.poolId)");
+    }
+
+    // ---- name conversion tests ----
+
+    #[test]
+    fn snake_to_camel() {
+        assert_eq!(to_camel_case("list_item"), "listItem");
+        assert_eq!(to_camel_case("cancel_listing"), "cancelListing");
+        assert_eq!(to_camel_case("get_price"), "getPrice");
+        assert_eq!(to_camel_case("withdraw"), "withdraw");
+    }
+
+    #[test]
+    fn name_to_env_var() {
+        assert_eq!(to_env_var_name("my_dex"), "MY_DEX");
+        assert_eq!(to_env_var_name("marketplace"), "MARKETPLACE");
+        assert_eq!(to_env_var_name("MyProject"), "MY_PROJECT");
+    }
+
+    // ---- BCS type string tests ----
+
+    #[test]
+    fn bcs_type_strings() {
+        assert_eq!(to_bcs_type_string(&MoveType::U8), "u8");
+        assert_eq!(to_bcs_type_string(&MoveType::U64), "u64");
+        assert_eq!(to_bcs_type_string(&MoveType::Bool), "bool");
+        assert_eq!(to_bcs_type_string(&MoveType::Address), "address");
+        assert_eq!(
+            to_bcs_type_string(&MoveType::Vector(Box::new(MoveType::U64))),
+            "vector<u64>"
+        );
+        assert_eq!(
+            to_bcs_type_string(&MoveType::Option(Box::new(MoveType::Address))),
+            "option<address>"
+        );
+        assert_eq!(
+            to_bcs_type_string(&MoveType::Vector(Box::new(MoveType::Option(Box::new(
+                MoveType::U64
+            ))))),
+            "vector<option<u64>>"
+        );
+    }
+
+    // ---- Code generation tests ----
+
+    #[test]
+    fn generates_errors_module() {
+        let output = generate_errors_module();
+        assert!(output.contains("export class Move2TsConfigError extends Error"));
+        assert!(output.contains("export function validateSuiAddress"));
+        assert!(output.contains("/^0x[0-9a-fA-F]{1,64}$/"));
+    }
+
+    #[test]
+    fn generates_simple_module() {
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "list_item".to_string(),
+                is_entry: true,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "price".to_string(),
+                    move_type: MoveType::U64,
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(output.contains("import process from 'node:process';"));
+        assert!(output.contains("function getPackageId(): string {"));
+        assert!(output.contains("MY_PROJECT_PACKAGE_ID"));
+        assert!(output.contains("export function listItem("));
+        assert!(output.contains("price: bigint;"));
+        assert!(output.contains("tx.pure.u64(args.price)"));
+        assert!(output.contains("marketplace::list_item"));
+    }
+
+    #[test]
+    fn generates_singleton_getter() {
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "get_price".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "marketplace".to_string(),
+                    move_type: MoveType::Ref {
+                        inner: Box::new(MoveType::Struct {
+                            module: None,
+                            name: "Marketplace".to_string(),
+                            type_args: vec![],
+                        }),
+                        is_mut: false,
+                    },
+                    is_singleton: true,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![],
+            singletons: HashSet::from(["Marketplace".to_string()]),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(output.contains("function getMarketplaceId(): string {"));
+        assert!(output.contains("MY_PROJECT_MARKETPLACE"));
+        assert!(output.contains("marketplace?: TransactionObjectInput;"));
+        assert!(output.contains("getMarketplaceId()"));
+    }
+
+    #[test]
+    fn generates_generic_function() {
+        let module = ModuleInfo {
+            name: "pool".to_string(),
+            functions: vec![FunctionInfo {
+                name: "withdraw".to_string(),
+                is_entry: false,
+                type_params: vec!["T".to_string()],
+                params: vec![
+                    ParamInfo {
+                        name: "pool_id".to_string(),
+                        move_type: MoveType::Ref {
+                            inner: Box::new(MoveType::Struct {
+                                module: None,
+                                name: "Pool".to_string(),
+                                type_args: vec![MoveType::TypeParam("T".to_string())],
+                            }),
+                            is_mut: true,
+                        },
+                        is_singleton: false,
+                    },
+                    ParamInfo {
+                        name: "amount".to_string(),
+                        move_type: MoveType::U64,
+                        is_singleton: false,
+                    },
+                ],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(output.contains("typeT: string;"));
+        assert!(output.contains("typeArguments: [args.typeT]"));
+    }
+
+    #[test]
+    fn generates_clock_injection() {
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "get_timed_price".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "marketplace".to_string(),
+                    move_type: MoveType::Ref {
+                        inner: Box::new(MoveType::Struct {
+                            module: None,
+                            name: "Marketplace".to_string(),
+                            type_args: vec![],
+                        }),
+                        is_mut: false,
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: true,
+                has_random_param: false,
+            }],
+            structs: vec![],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(output.contains("tx.object.clock()"));
+    }
+
+    #[test]
+    fn generates_struct_interface() {
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "create_listing".to_string(),
+                is_entry: true,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "listing".to_string(),
+                    move_type: MoveType::Ref {
+                        inner: Box::new(MoveType::Struct {
+                            module: None,
+                            name: "Listing".to_string(),
+                            type_args: vec![],
+                        }),
+                        is_mut: true,
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![StructInfo {
+                name: "Listing".to_string(),
+                fields: vec![
+                    ("id".to_string(), MoveType::ObjectId),
+                    ("price".to_string(), MoveType::U64),
+                    ("seller".to_string(), MoveType::Address),
+                ],
+                has_key: true,
+            }],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(output.contains("export interface Listing {"));
+        assert!(output.contains("id: string;"));
+        assert!(output.contains("price: bigint;"));
+        assert!(output.contains("seller: string;"));
+    }
+
+    #[test]
+    fn unreferenced_struct_not_emitted() {
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "get_count".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "value".to_string(),
+                    move_type: MoveType::U64,
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![StructInfo {
+                name: "InternalState".to_string(),
+                fields: vec![("count".to_string(), MoveType::U64)],
+                has_key: false,
+            }],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(!output.contains("export interface InternalState"));
+    }
+
+    #[test]
+    fn generates_no_arg_function() {
+        let module = ModuleInfo {
+            name: "counter".to_string(),
+            functions: vec![FunctionInfo {
+                name: "reset".to_string(),
+                is_entry: true,
+                type_params: vec![],
+                params: vec![],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![],
+            singletons: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(output.contains("export function reset(tx: Transaction): TransactionResult {"));
+    }
+}
