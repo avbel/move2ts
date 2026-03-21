@@ -82,8 +82,29 @@ pub fn to_ts_type(ty: &MoveType) -> String {
                 "string".to_string()
             }
         }
-        MoveType::Struct { name, .. } => name.clone(),
+        MoveType::Struct { name, .. } => {
+            // Default: return the struct name. Use to_ts_type_for_param() for
+            // context-aware resolution that distinguishes objects from pure values.
+            name.clone()
+        }
         MoveType::Unit => "void".to_string(),
+    }
+}
+
+/// Maps a MoveType to its TypeScript type for function parameters.
+/// Unlike `to_ts_type`, this uses module context: external structs (not in the module's
+/// own pure value structs) default to TransactionObjectInput since they're objects.
+/// Only the module's own copy+drop structs get their interface name.
+fn to_ts_type_for_param(ty: &MoveType, own_pure_structs: &HashSet<String>) -> String {
+    match ty {
+        MoveType::Struct { name, .. } => {
+            if own_pure_structs.contains(name.as_str()) {
+                name.clone()
+            } else {
+                "TransactionObjectInput".to_string()
+            }
+        }
+        _ => to_ts_type(ty),
     }
 }
 
@@ -470,6 +491,13 @@ fn generate_function_wrapper(
     let ts_name = to_camel_case(&func.name);
     let has_args = !func.params.is_empty() || !func.type_params.is_empty();
 
+    // Collect the module's own pure value struct names for type resolution
+    let own_pure_structs: HashSet<String> = structs
+        .iter()
+        .filter(|s| s.is_pure_value())
+        .map(|s| s.name.clone())
+        .collect();
+
     // Build args type entries
     let mut arg_entries: Vec<String> = Vec::new();
 
@@ -483,10 +511,9 @@ fn generate_function_wrapper(
     for param in &func.params {
         let ts_param_name = to_camel_case(&param.name);
         let ts_type = if param.is_singleton {
-            // Singletons are always object IDs, regardless of struct abilities
             "TransactionObjectInput".to_string()
         } else {
-            to_ts_type(&param.move_type)
+            to_ts_type_for_param(&param.move_type, &own_pure_structs)
         };
         let optional = if param.is_singleton { "?" } else { "" };
         arg_entries.push(format!("{ts_param_name}{optional}: {ts_type};"));
@@ -1315,6 +1342,69 @@ mod tests {
         );
         assert!(output.contains("maxItems: bigint;"));
         assert!(output.contains("enabled: boolean;"));
+    }
+
+    #[test]
+    fn external_object_struct_maps_to_transaction_object_input() {
+        // Coin<USDC>, Kiosk, etc. are external structs not in our module.
+        // They should map to TransactionObjectInput, not their struct name.
+        let module = ModuleInfo {
+            name: "marketplace".to_string(),
+            functions: vec![FunctionInfo {
+                name: "buy_item".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![
+                    ParamInfo {
+                        name: "coin".to_string(),
+                        move_type: MoveType::Struct {
+                            module: Some("coin".to_string()),
+                            name: "Coin".to_string(),
+                            type_args: vec![MoveType::Struct {
+                                module: Some("usdc".to_string()),
+                                name: "USDC".to_string(),
+                                type_args: vec![],
+                            }],
+                        },
+                        is_singleton: false,
+                    },
+                    ParamInfo {
+                        name: "kiosk".to_string(),
+                        move_type: MoveType::Struct {
+                            module: Some("kiosk".to_string()),
+                            name: "Kiosk".to_string(),
+                            type_args: vec![],
+                        },
+                        is_singleton: false,
+                    },
+                ],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![], // no own structs — Coin and Kiosk are external
+            singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            output.contains("coin: TransactionObjectInput;"),
+            "Coin<USDC> should be TransactionObjectInput, got: {}",
+            output
+        );
+        assert!(
+            output.contains("kiosk: TransactionObjectInput;"),
+            "Kiosk should be TransactionObjectInput"
+        );
+        // Should NOT contain raw type names as types
+        assert!(!output.contains("coin: Coin;"));
+        assert!(!output.contains("kiosk: Kiosk;"));
     }
 
     // ---- BCS serialization tests ----
