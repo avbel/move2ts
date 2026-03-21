@@ -263,15 +263,6 @@ move2ts ./marketplace.move --methods list_item,cancel_listing -o ./sdk
 move2ts ./marketplace.move --skip-methods admin_withdraw,set_fee -o ./sdk
 ```
 
-### Using with a CI pipeline
-
-```bash
-# In your CI, after deploying a new Move package version:
-move2ts ./contracts/ \
-  --package-id-name MARKETPLACE_PACKAGE_ID \
-  -o ./frontend/src/generated
-
-# Generated code picks up the package ID from env at runtime
 ```
 
 ### Composing multiple transaction commands
