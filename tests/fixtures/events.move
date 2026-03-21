@@ -93,6 +93,6 @@ module my_project::marketplace_events {
         range: PriceRange,
         ctx: &mut TxContext,
     ) {
-        abort 0
+        let _x = 0;
     }
 }

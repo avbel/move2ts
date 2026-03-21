@@ -577,6 +577,30 @@ fn extract_structs(module_def: &ModuleDefinition) -> Vec<StructInfo> {
     structs
 }
 
+/// Returns true if a function body is just `abort N` — a deprecated/legacy stub.
+fn is_abort_only_body(body: &move_compiler::parser::ast::FunctionBody) -> bool {
+    let FunctionBody_::Defined(seq) = &body.value else {
+        return false;
+    };
+    let (_, items, _, trailing) = seq;
+
+    // Case: `{ abort N }` — no items, trailing is Abort
+    if items.is_empty() {
+        if let Some(exp) = trailing.as_ref() {
+            return matches!(&exp.value, Exp_::Abort(_));
+        }
+    }
+
+    // Case: `{ abort N; }` — single Seq item is Abort
+    if items.len() == 1 && trailing.is_none() {
+        if let SequenceItem_::Seq(exp) = &items[0].value {
+            return matches!(&exp.value, Exp_::Abort(_));
+        }
+    }
+
+    false
+}
+
 /// Extracts all public/entry functions from a module, applying singleton marking.
 fn extract_functions(
     module_def: &ModuleDefinition,
@@ -597,6 +621,11 @@ fn extract_functions(
 
             // Skip macro functions
             if func.macro_.is_some() {
+                continue;
+            }
+
+            // Skip abort/panic-only functions (deprecated/legacy stubs like `abort E_DEPRECATED`)
+            if is_abort_only_body(&func.body) {
                 continue;
             }
 
@@ -1309,7 +1338,7 @@ module test_pkg::non_singleton_mod {
         let source = r#"
 module test_pkg::generic_mod {
     public fun withdraw<T>(pool: &mut Pool<T>, amount: u64, ctx: &mut TxContext) {
-        abort 0
+        pool.amount = amount;
     }
 }
 "#;
@@ -1332,15 +1361,15 @@ module test_pkg::generic_mod {
         let source = r#"
 module test_pkg::special_mod {
     public fun timed_action(pool: &mut Pool, clock: &Clock, ctx: &mut TxContext) {
-        abort 0
+        pool.value = 1;
     }
 
     public fun random_action(pool: &mut Pool, rng: &Random, ctx: &mut TxContext) {
-        abort 0
+        pool.value = 2;
     }
 
     public fun both_special(pool: &mut Pool, clock: &Clock, rng: &Random, ctx: &mut TxContext) {
-        abort 0
+        pool.value = 3;
     }
 }
 "#;
@@ -1373,7 +1402,7 @@ module test_pkg::special_mod {
 module test_pkg::visibility_mod {
     public fun pub_fn(a: u64): u64 { a }
     fun private_fn(b: u64): u64 { b }
-    entry fun entry_fn(c: u64) { abort 0 }
+    entry fun entry_fn(c: u64) { let _x = c; }
 }
 "#;
         let parser = MoveParser::new();
@@ -1428,7 +1457,7 @@ module test_pkg::type_mod {
         let source = r#"
 module test_pkg::primitives_mod {
     public fun transfer_to(active: bool, recipient: address) {
-        abort 0
+        let _a = active;
     }
 }
 "#;
@@ -1439,5 +1468,62 @@ module test_pkg::primitives_mod {
         let func = &modules[0].functions[0];
         assert_eq!(func.params[0].move_type, MoveType::Bool);
         assert_eq!(func.params[1].move_type, MoveType::Address);
+    }
+
+    #[test]
+    fn skips_abort_only_functions() {
+        // Functions with only `abort N` are deprecated stubs — should be skipped
+        let source = r#"
+module test_pkg::legacy_mod {
+    public fun active_fn(value: u64): u64 { value + 1 }
+
+    public fun deprecated_fn(value: u64) {
+        abort 6
+    }
+
+    public entry fun deprecated_entry(a: u64, b: u64) {
+        abort 0
+    }
+
+    public fun also_active(x: bool): bool { x }
+}
+"#;
+        let parser = MoveParser::new();
+        let defs = parser.parse_source(source).expect("should parse");
+        let modules = extract_modules(&defs);
+
+        let names: Vec<&str> = modules[0]
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["active_fn", "also_active"]);
+        assert!(
+            !names.contains(&"deprecated_fn"),
+            "abort-only function should be skipped"
+        );
+        assert!(
+            !names.contains(&"deprecated_entry"),
+            "abort-only entry should be skipped"
+        );
+    }
+
+    #[test]
+    fn keeps_function_with_abort_plus_other_code() {
+        // A function that has abort but also other code should NOT be skipped
+        let source = r#"
+module test_pkg::mixed_mod {
+    public fun guarded_fn(value: u64): u64 {
+        assert!(value > 0, 1);
+        value
+    }
+}
+"#;
+        let parser = MoveParser::new();
+        let defs = parser.parse_source(source).expect("should parse");
+        let modules = extract_modules(&defs);
+
+        assert_eq!(modules[0].functions.len(), 1);
+        assert_eq!(modules[0].functions[0].name, "guarded_fn");
     }
 }

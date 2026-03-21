@@ -10,7 +10,7 @@ module my_project::defi {
         min_out: u64,
         ctx: &mut TxContext,
     ): u64 {
-        abort 0
+        let _x = 0;
     }
 
     public fun withdraw<T>(
@@ -18,7 +18,7 @@ module my_project::defi {
         amount: u64,
         ctx: &mut TxContext,
     ) {
-        abort 0
+        let _x = 0;
     }
 
     public fun get_random_reward(
@@ -27,6 +27,6 @@ module my_project::defi {
         clock: &Clock,
         ctx: &mut TxContext,
     ): u64 {
-        abort 0
+        let _x = 0;
     }
 }

@@ -23,14 +23,14 @@ module my_project::marketplace {
         price: u64,
         ctx: &mut TxContext,
     ) {
-        abort 0
+        let _x = 0;
     }
 
     public fun get_price(
         marketplace: &Marketplace,
         clock: &Clock,
     ): u64 {
-        abort 0
+        let _x = 0;
     }
 
     public fun cancel_listing(
@@ -38,6 +38,6 @@ module my_project::marketplace {
         listing: &mut Listing,
         ctx: &mut TxContext,
     ) {
-        abort 0
+        let _x = 0;
     }
 }

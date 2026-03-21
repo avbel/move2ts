@@ -32,7 +32,7 @@ module my_project::config {
         new_config: Config,
         ctx: &mut TxContext,
     ) {
-        abort 0
+        let _x = 0;
     }
 
     public fun set_metadata(
@@ -41,11 +41,11 @@ module my_project::config {
         clock: &Clock,
         ctx: &mut TxContext,
     ) {
-        abort 0
+        let _x = 0;
     }
 
     public fun get_config(registry: &Registry): Config {
-        abort 0
+        let _x = 0;
     }
 
     public entry fun apply_defaults(
@@ -54,6 +54,6 @@ module my_project::config {
         fee_bps: u16,
         ctx: &mut TxContext,
     ) {
-        abort 0
+        let _x = 0;
     }
 }
