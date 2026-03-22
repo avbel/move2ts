@@ -1450,6 +1450,32 @@ module test_pkg::visibility_mod {
     }
 
     #[test]
+    fn skips_package_visibility_functions() {
+        let source = r#"
+module test_pkg::pkg_vis_mod {
+    public fun pub_fn(a: u64): u64 { a }
+    public(package) fun pkg_fn(b: u64): u64 { b }
+    entry fun entry_fn(c: u64) { let _x = c; }
+}
+"#;
+        let parser = MoveParser::new();
+        let defs = parser.parse_source(source).expect("should parse");
+        let modules = extract_modules(&defs);
+
+        let names: Vec<&str> = modules[0]
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert!(names.contains(&"pub_fn"));
+        assert!(names.contains(&"entry_fn"));
+        assert!(
+            !names.contains(&"pkg_fn"),
+            "public(package) functions should be skipped"
+        );
+    }
+
+    #[test]
     fn extracts_vector_and_option_types() {
         let source = r#"
 module test_pkg::type_mod {

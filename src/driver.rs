@@ -151,17 +151,21 @@ pub fn run(cli: &Cli) -> Result<()> {
         println!("Generated: {}", output_file.display());
     }
 
-    // Generate errors module
-    let errors_content = generate_errors_module();
-    let errors_file = cli.output.join("move2ts-errors.ts");
-    fs::write(&errors_file, &errors_content)
-        .with_context(|| format!("Failed to write {}", errors_file.display()))?;
-    println!("Generated: {}", errors_file.display());
+    if generated_count == 0 {
+        println!("\nNo modules generated — all modules were empty.");
+    } else {
+        // Generate errors module
+        let errors_content = generate_errors_module();
+        let errors_file = cli.output.join("move2ts-errors.ts");
+        fs::write(&errors_file, &errors_content)
+            .with_context(|| format!("Failed to write {}", errors_file.display()))?;
+        println!("Generated: {}", errors_file.display());
 
-    println!(
-        "\nDone: {generated_count} module(s) generated in {}",
-        cli.output.display()
-    );
+        println!(
+            "\nDone: {generated_count} module(s) generated in {}",
+            cli.output.display()
+        );
+    }
 
     Ok(())
 }
