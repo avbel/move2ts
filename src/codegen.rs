@@ -74,6 +74,7 @@ pub fn to_ts_type(ty: &MoveType) -> String {
             }
         }
         MoveType::Option(inner) => format!("{} | null", to_ts_type(inner)),
+        MoveType::VecMap(key, value) => format!("Map<{}, {}>", to_ts_type(key), to_ts_type(value)),
         MoveType::Ref { .. } => "TransactionObjectInput".to_string(),
         MoveType::TypeParam { has_key, .. } => {
             if *has_key {
@@ -124,13 +125,32 @@ pub fn to_tx_encoding(ty: &MoveType, expr: &str) -> String {
         MoveType::Vector(inner) if **inner == MoveType::U8 => {
             format!("tx.pure('vector<u8>', {expr})")
         }
+        MoveType::Vector(inner) if type_contains_vecmap(inner) => {
+            format!(
+                "tx.pure(bcs.vector({}).serialize({expr}))",
+                to_bcs_schema(inner, &[])
+            )
+        }
         MoveType::Vector(inner) => {
             let inner_bcs = to_bcs_type_string(inner);
             format!("tx.pure.vector('{inner_bcs}', {expr})")
         }
+        MoveType::Option(inner) if type_contains_vecmap(inner) => {
+            format!(
+                "tx.pure(bcs.option({}).serialize({expr}))",
+                to_bcs_schema(inner, &[])
+            )
+        }
         MoveType::Option(inner) => {
             let inner_bcs = to_bcs_type_string(inner);
             format!("tx.pure.option('{inner_bcs}', {expr})")
+        }
+        MoveType::VecMap(key, value) => {
+            format!(
+                "tx.pure(bcs.map({}, {}).serialize({expr}))",
+                to_bcs_schema(key, &[]),
+                to_bcs_schema(value, &[])
+            )
         }
         MoveType::Ref { .. } => format!("tx.object({expr})"),
         MoveType::TypeParam { has_key, .. } => {
@@ -156,11 +176,18 @@ fn to_bcs_schema(ty: &MoveType, structs: &[StructInfo]) -> String {
         MoveType::U128 => "bcs.u128()".to_string(),
         MoveType::U256 => "bcs.u256()".to_string(),
         MoveType::Bool => "bcs.bool()".to_string(),
-        MoveType::Address => "Address".to_string(),
+        MoveType::Address => "bcs.Address".to_string(),
         MoveType::SuiString => "bcs.string()".to_string(),
-        MoveType::ObjectId => "Address".to_string(),
+        MoveType::ObjectId => "bcs.Address".to_string(),
         MoveType::Vector(inner) => format!("bcs.vector({})", to_bcs_schema(inner, structs)),
         MoveType::Option(inner) => format!("bcs.option({})", to_bcs_schema(inner, structs)),
+        MoveType::VecMap(key, value) => {
+            format!(
+                "bcs.map({}, {})",
+                to_bcs_schema(key, structs),
+                to_bcs_schema(value, structs)
+            )
+        }
         MoveType::Struct { name, .. } => {
             if let Some(si) = structs
                 .iter()
@@ -211,6 +238,26 @@ fn to_tx_encoding_with_context(ty: &MoveType, expr: &str, structs: &[StructInfo]
             // Default: treat as object
             format!("tx.object({expr})")
         }
+        MoveType::VecMap(key, value) => {
+            format!(
+                "tx.pure(bcs.map({}, {}).serialize({expr}))",
+                to_bcs_schema(key, structs),
+                to_bcs_schema(value, structs)
+            )
+        }
+        // For Vector/Option containing VecMap, use bcs schema path with struct context
+        MoveType::Vector(inner) if type_contains_vecmap(inner) => {
+            format!(
+                "tx.pure(bcs.vector({}).serialize({expr}))",
+                to_bcs_schema(inner, structs)
+            )
+        }
+        MoveType::Option(inner) if type_contains_vecmap(inner) => {
+            format!(
+                "tx.pure(bcs.option({}).serialize({expr}))",
+                to_bcs_schema(inner, structs)
+            )
+        }
         _ => to_tx_encoding(ty, expr),
     }
 }
@@ -221,6 +268,9 @@ fn type_contains_address(ty: &MoveType, structs: &[StructInfo]) -> bool {
     match ty {
         MoveType::Address | MoveType::ObjectId => true,
         MoveType::Vector(inner) | MoveType::Option(inner) => type_contains_address(inner, structs),
+        MoveType::VecMap(key, value) => {
+            type_contains_address(key, structs) || type_contains_address(value, structs)
+        }
         MoveType::Struct { name, .. } => {
             if let Some(si) = structs
                 .iter()
@@ -232,6 +282,28 @@ fn type_contains_address(ty: &MoveType, structs: &[StructInfo]) -> bool {
             } else {
                 false
             }
+        }
+        _ => false,
+    }
+}
+
+/// Returns true if a MoveType contains VecMap anywhere in its tree.
+fn type_contains_vecmap(ty: &MoveType) -> bool {
+    match ty {
+        MoveType::VecMap(_, _) => true,
+        MoveType::Vector(inner) | MoveType::Option(inner) => type_contains_vecmap(inner),
+        _ => false,
+    }
+}
+
+/// Returns true if any VecMap in the type tree has Address/ObjectId in its key or value types.
+fn param_vecmap_contains_address(ty: &MoveType, structs: &[StructInfo]) -> bool {
+    match ty {
+        MoveType::VecMap(key, value) => {
+            type_contains_address(key, structs) || type_contains_address(value, structs)
+        }
+        MoveType::Vector(inner) | MoveType::Option(inner) => {
+            param_vecmap_contains_address(inner, structs)
         }
         _ => false,
     }
@@ -252,6 +324,9 @@ fn to_bcs_type_string(ty: &MoveType) -> String {
         MoveType::ObjectId => "address".to_string(),
         MoveType::Vector(inner) => format!("vector<{}>", to_bcs_type_string(inner)),
         MoveType::Option(inner) => format!("option<{}>", to_bcs_type_string(inner)),
+        MoveType::VecMap(_, _) => {
+            panic!("VecMap has no BCS type string — use to_bcs_schema() instead")
+        }
         _ => panic!("unsupported BCS type: {ty:?}"),
     }
 }
@@ -308,11 +383,21 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
         })
         .collect();
 
-    let needs_bcs = !used_pure_structs.is_empty();
+    // Check if any function param transitively contains VecMap
+    let has_vecmap_param = module
+        .functions
+        .iter()
+        .any(|f| f.params.iter().any(|p| type_contains_vecmap(&p.move_type)));
+
+    let needs_bcs = !used_pure_structs.is_empty() || has_vecmap_param;
     let needs_address = used_pure_structs.iter().any(|s| {
         s.fields
             .iter()
             .any(|(_, ty)| type_contains_address(ty, &module.structs))
+    }) || module.functions.iter().any(|f| {
+        f.params
+            .iter()
+            .any(|p| param_vecmap_contains_address(&p.move_type, &module.structs))
     });
 
     // --- Imports ---
@@ -323,11 +408,11 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     w.line("import { Transaction } from '@mysten/sui/transactions';");
     w.line("import { isValidSuiAddress } from '@mysten/sui/utils';");
     w.line("import { InvalidConfigError } from './move2ts-errors';");
-    if needs_bcs {
+    if needs_bcs && needs_address {
+        // @mysten/sui/bcs re-exports @mysten/bcs plus Sui-specific types (Address, etc.)
+        w.line("import { bcs } from '@mysten/sui/bcs';");
+    } else if needs_bcs {
         w.line("import { bcs } from '@mysten/bcs';");
-    }
-    if needs_address {
-        w.line("import { Address } from '@mysten/sui/bcs';");
     }
     w.blank();
 
@@ -532,6 +617,10 @@ fn collect_struct_refs_from_type(
         }
         MoveType::Option(inner) => {
             collect_struct_refs_from_type(inner, struct_names, referenced);
+        }
+        MoveType::VecMap(key, value) => {
+            collect_struct_refs_from_type(key, struct_names, referenced);
+            collect_struct_refs_from_type(value, struct_names, referenced);
         }
         _ => {}
     }
@@ -739,6 +828,38 @@ mod tests {
         // vector<vector<u8>> -> Uint8Array[]
         let ty = MoveType::Vector(Box::new(MoveType::Vector(Box::new(MoveType::U8))));
         assert_eq!(to_ts_type(&ty), "Uint8Array[]");
+    }
+
+    // ---- VecMap type mapping tests ----
+
+    #[test]
+    fn vecmap_maps_to_ts_map() {
+        let ty = MoveType::VecMap(Box::new(MoveType::U64), Box::new(MoveType::Bool));
+        assert_eq!(to_ts_type(&ty), "Map<bigint, boolean>");
+    }
+
+    #[test]
+    fn vecmap_address_string() {
+        let ty = MoveType::VecMap(Box::new(MoveType::Address), Box::new(MoveType::SuiString));
+        assert_eq!(to_ts_type(&ty), "Map<string, string>");
+    }
+
+    #[test]
+    fn vector_vecmap() {
+        let ty = MoveType::Vector(Box::new(MoveType::VecMap(
+            Box::new(MoveType::U64),
+            Box::new(MoveType::Bool),
+        )));
+        assert_eq!(to_ts_type(&ty), "Map<bigint, boolean>[]");
+    }
+
+    #[test]
+    fn option_vecmap() {
+        let ty = MoveType::Option(Box::new(MoveType::VecMap(
+            Box::new(MoveType::Address),
+            Box::new(MoveType::U64),
+        )));
+        assert_eq!(to_ts_type(&ty), "Map<string, bigint> | null");
     }
 
     #[test]
@@ -1470,9 +1591,9 @@ mod tests {
         assert_eq!(to_bcs_schema(&MoveType::U8, &[]), "bcs.u8()");
         assert_eq!(to_bcs_schema(&MoveType::U64, &[]), "bcs.u64()");
         assert_eq!(to_bcs_schema(&MoveType::Bool, &[]), "bcs.bool()");
-        assert_eq!(to_bcs_schema(&MoveType::Address, &[]), "Address");
+        assert_eq!(to_bcs_schema(&MoveType::Address, &[]), "bcs.Address");
         assert_eq!(to_bcs_schema(&MoveType::SuiString, &[]), "bcs.string()");
-        assert_eq!(to_bcs_schema(&MoveType::ObjectId, &[]), "Address");
+        assert_eq!(to_bcs_schema(&MoveType::ObjectId, &[]), "bcs.Address");
     }
 
     #[test]
@@ -1520,6 +1641,89 @@ mod tests {
             to_bcs_schema(&vec_opt_u8, &[]),
             "bcs.vector(bcs.option(bcs.u8()))"
         );
+    }
+
+    #[test]
+    fn bcs_schema_vecmap() {
+        let ty = MoveType::VecMap(Box::new(MoveType::U64), Box::new(MoveType::Bool));
+        assert_eq!(to_bcs_schema(&ty, &[]), "bcs.map(bcs.u64(), bcs.bool())");
+    }
+
+    #[test]
+    fn bcs_schema_vecmap_with_address() {
+        let ty = MoveType::VecMap(Box::new(MoveType::Address), Box::new(MoveType::SuiString));
+        assert_eq!(
+            to_bcs_schema(&ty, &[]),
+            "bcs.map(bcs.Address, bcs.string())"
+        );
+    }
+
+    #[test]
+    fn bcs_schema_vector_of_vecmap() {
+        let ty = MoveType::Vector(Box::new(MoveType::VecMap(
+            Box::new(MoveType::U64),
+            Box::new(MoveType::Bool),
+        )));
+        assert_eq!(
+            to_bcs_schema(&ty, &[]),
+            "bcs.vector(bcs.map(bcs.u64(), bcs.bool()))"
+        );
+    }
+
+    #[test]
+    fn bcs_schema_option_of_vecmap() {
+        let ty = MoveType::Option(Box::new(MoveType::VecMap(
+            Box::new(MoveType::Address),
+            Box::new(MoveType::U64),
+        )));
+        assert_eq!(
+            to_bcs_schema(&ty, &[]),
+            "bcs.option(bcs.map(bcs.Address, bcs.u64()))"
+        );
+    }
+
+    #[test]
+    fn vecmap_tx_encoding() {
+        let ty = MoveType::VecMap(Box::new(MoveType::U64), Box::new(MoveType::Bool));
+        let result = to_tx_encoding(&ty, "args.data");
+        assert_eq!(
+            result,
+            "tx.pure(bcs.map(bcs.u64(), bcs.bool()).serialize(args.data))"
+        );
+    }
+
+    #[test]
+    fn vector_vecmap_tx_encoding() {
+        let ty = MoveType::Vector(Box::new(MoveType::VecMap(
+            Box::new(MoveType::U64),
+            Box::new(MoveType::Bool),
+        )));
+        let result = to_tx_encoding(&ty, "args.items");
+        assert_eq!(
+            result,
+            "tx.pure(bcs.vector(bcs.map(bcs.u64(), bcs.bool())).serialize(args.items))"
+        );
+    }
+
+    #[test]
+    fn option_vecmap_tx_encoding() {
+        let ty = MoveType::Option(Box::new(MoveType::VecMap(
+            Box::new(MoveType::Address),
+            Box::new(MoveType::U64),
+        )));
+        let result = to_tx_encoding(&ty, "args.opt");
+        assert_eq!(
+            result,
+            "tx.pure(bcs.option(bcs.map(bcs.Address, bcs.u64())).serialize(args.opt))"
+        );
+    }
+
+    #[test]
+    fn vector_without_vecmap_uses_type_string() {
+        // Simple Vector<u64> should still use tx.pure.vector, not bcs.vector
+        let ty = MoveType::Vector(Box::new(MoveType::U64));
+        let result = to_tx_encoding(&ty, "args.v");
+        assert_eq!(result, "tx.pure.vector('u64', args.v)");
     }
 
     #[test]
@@ -1965,12 +2169,12 @@ mod tests {
 
         let output = generate_module(&module, &config);
         assert!(
-            output.contains("import { Address } from '@mysten/sui/bcs';"),
-            "should import Address from @mysten/sui/bcs"
+            output.contains("import { bcs } from '@mysten/sui/bcs';"),
+            "should import bcs from @mysten/sui/bcs when Address is needed"
         );
         assert!(
-            output.contains("itemId: Address"),
-            "should use Address (not bcs.Address) in struct schema"
+            output.contains("itemId: bcs.Address"),
+            "should use bcs.Address in struct schema"
         );
     }
 
@@ -2015,6 +2219,130 @@ mod tests {
         assert!(
             !output.contains("@mysten/sui/bcs"),
             "should NOT import Address when no Address/ObjectId fields"
+        );
+    }
+
+    #[test]
+    fn vecmap_param_imports_bcs() {
+        let module = ModuleInfo {
+            name: "map_mod".to_string(),
+            functions: vec![FunctionInfo {
+                name: "set_config".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "data".to_string(),
+                    move_type: MoveType::VecMap(Box::new(MoveType::U64), Box::new(MoveType::Bool)),
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            output.contains("import { bcs } from '@mysten/bcs';"),
+            "VecMap param should trigger bcs import"
+        );
+        assert!(
+            output.contains("bcs.map(bcs.u64(), bcs.bool())"),
+            "should use bcs.map encoding"
+        );
+        assert!(
+            output.contains("data: Map<bigint, boolean>"),
+            "should type param as Map<bigint, boolean>"
+        );
+    }
+
+    #[test]
+    fn vecmap_address_param_imports_address() {
+        let module = ModuleInfo {
+            name: "map_addr_mod".to_string(),
+            functions: vec![FunctionInfo {
+                name: "set_targets".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "targets".to_string(),
+                    move_type: MoveType::VecMap(
+                        Box::new(MoveType::Address),
+                        Box::new(MoveType::U64),
+                    ),
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            output.contains("import { bcs } from '@mysten/sui/bcs';"),
+            "VecMap<address, u64> should import bcs from @mysten/sui/bcs"
+        );
+        assert!(
+            output.contains("bcs.map(bcs.Address, bcs.u64())"),
+            "should use bcs.Address in bcs.map"
+        );
+    }
+
+    #[test]
+    fn vecmap_no_address_import_without_address_types() {
+        let module = ModuleInfo {
+            name: "map_no_addr".to_string(),
+            functions: vec![FunctionInfo {
+                name: "set_flags".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "flags".to_string(),
+                    move_type: MoveType::VecMap(
+                        Box::new(MoveType::SuiString),
+                        Box::new(MoveType::Bool),
+                    ),
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            output.contains("import { bcs } from '@mysten/bcs';"),
+            "should import bcs"
+        );
+        assert!(
+            !output.contains("@mysten/sui/bcs"),
+            "should NOT import Address when VecMap has no address types"
         );
     }
 
@@ -2143,12 +2471,12 @@ mod tests {
 
         let output = generate_module(&module, &config);
         assert!(
-            output.contains("import { Address } from '@mysten/sui/bcs';"),
-            "should import Address when nested struct has ObjectId field"
+            output.contains("import { bcs } from '@mysten/sui/bcs';"),
+            "should import bcs from @mysten/sui/bcs when nested struct has ObjectId field"
         );
         assert!(
-            output.contains("target: Address"),
-            "nested Inner struct should use Address in BCS schema"
+            output.contains("target: bcs.Address"),
+            "nested Inner struct should use bcs.Address in BCS schema"
         );
     }
 

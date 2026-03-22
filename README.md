@@ -109,6 +109,7 @@ Generated code reads these environment variables at runtime:
 | `vector<u8>` | `Uint8Array` | `tx.pure('vector<u8>', v)` |
 | `vector<T>` | `MappedT[]` | `tx.pure.vector('innerType', v)` |
 | `Option<T>` | `MappedT \| null` | `tx.pure.option('innerType', v)` |
+| `VecMap<K, V>` | `Map<MappedK, MappedV>` | `tx.pure(bcs.map(K, V).serialize(v))` |
 | `struct (copy+drop)` | `{ field1: type1, ... }` | `tx.pure(bcs.struct(...).serialize(v))` |
 | `Coin<T>` / `Balance<T>` (by ref) | `TransactionObjectInput` | `tx.object(v)` |
 | `&T` / `&mut T` (object) | `TransactionObjectInput` | `tx.object(v)` |

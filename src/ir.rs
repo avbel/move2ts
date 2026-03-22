@@ -17,6 +17,7 @@ pub enum MoveType {
     ObjectId,
     Vector(Box<MoveType>),
     Option(Box<MoveType>),
+    VecMap(Box<MoveType>, Box<MoveType>),
     Ref {
         inner: Box<MoveType>,
         is_mut: bool,

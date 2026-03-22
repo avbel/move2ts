@@ -292,6 +292,118 @@ fn full_pipeline_pure_structs() {
 }
 
 #[test]
+fn full_pipeline_vecmap() {
+    let source = fs::read_to_string("tests/fixtures/vecmap.move").expect("fixture exists");
+    let modules = parse_and_extract(&source);
+
+    assert_eq!(modules.len(), 1);
+    let module = &modules[0];
+    assert_eq!(module.name, "maps");
+
+    // set_labels should have a VecMap<u64, bool> param
+    let set_labels = module
+        .functions
+        .iter()
+        .find(|f| f.name == "set_labels")
+        .expect("set_labels exists");
+    let labels_param = set_labels
+        .params
+        .iter()
+        .find(|p| p.name == "labels")
+        .expect("labels param exists");
+    assert_eq!(
+        labels_param.move_type,
+        move2ts::ir::MoveType::VecMap(
+            Box::new(move2ts::ir::MoveType::U64),
+            Box::new(move2ts::ir::MoveType::Bool),
+        )
+    );
+
+    // set_addresses should have VecMap<address, u64>
+    let set_addresses = module
+        .functions
+        .iter()
+        .find(|f| f.name == "set_addresses")
+        .expect("set_addresses exists");
+    let targets_param = set_addresses
+        .params
+        .iter()
+        .find(|p| p.name == "targets")
+        .expect("targets param exists");
+    assert_eq!(
+        targets_param.move_type,
+        move2ts::ir::MoveType::VecMap(
+            Box::new(move2ts::ir::MoveType::Address),
+            Box::new(move2ts::ir::MoveType::U64),
+        )
+    );
+
+    // Settings struct should have a VecMap field
+    let settings = module
+        .structs
+        .iter()
+        .find(|s| s.name == "Settings")
+        .expect("Settings struct exists");
+    assert!(settings.is_pure_value());
+    let labels_field = settings
+        .fields
+        .iter()
+        .find(|(name, _)| name == "labels")
+        .expect("labels field exists");
+    assert_eq!(
+        labels_field.1,
+        move2ts::ir::MoveType::VecMap(
+            Box::new(move2ts::ir::MoveType::U64),
+            Box::new(move2ts::ir::MoveType::Bool),
+        )
+    );
+
+    // Generate TypeScript and verify output
+    let config = CodegenConfig {
+        package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+        project_name: "my_project".to_string(),
+        include_events: false,
+    };
+    let ts_output = generate_module(module, &config);
+
+    // Should import bcs from @mysten/sui/bcs (includes both bcs and Address)
+    assert!(
+        ts_output.contains("import { bcs } from '@mysten/sui/bcs';"),
+        "should import bcs from @mysten/sui/bcs (module has VecMap<address, u64>)"
+    );
+
+    // set_labels param should be Map<bigint, boolean>
+    assert!(
+        ts_output.contains("labels: Map<bigint, boolean>"),
+        "VecMap<u64, bool> should map to Map<bigint, boolean>"
+    );
+
+    // set_addresses param should be Map<string, bigint>
+    assert!(
+        ts_output.contains("targets: Map<string, bigint>"),
+        "VecMap<address, u64> should map to Map<string, bigint>"
+    );
+
+    // Settings interface should have labels field as Map
+    assert!(
+        ts_output.contains("labels: Map<bigint, boolean>;"),
+        "Settings.labels should be Map<bigint, boolean>"
+    );
+
+    // BCS encoding should use bcs.map
+    assert!(
+        ts_output.contains("bcs.map(bcs.u64(), bcs.bool())"),
+        "should use bcs.map for VecMap encoding"
+    );
+
+    // bcs.Address should be used in bcs.map for address keys
+    assert!(
+        ts_output.contains("bcs.map(bcs.Address, bcs.u64())"),
+        "should use bcs.Address in bcs.map for address keys"
+    );
+}
+
+#[test]
 fn full_pipeline_events() {
     let source = fs::read_to_string("tests/fixtures/events.move").expect("fixture exists");
     let modules = parse_and_extract(&source);
@@ -436,6 +548,15 @@ fn generated_ts_compiles_with_tsc() {
         generate_module(&events_modules[0], &events_config),
     )
     .expect("write marketplace_events.ts");
+
+    // VecMap module
+    let vecmap_source = fs::read_to_string("tests/fixtures/vecmap.move").expect("fixture exists");
+    let vecmap_modules = parse_and_extract(&vecmap_source);
+    fs::write(
+        generated_dir.join("maps.ts"),
+        generate_module(&vecmap_modules[0], &config),
+    )
+    .expect("write maps.ts");
 
     // Shared errors module
     fs::write(

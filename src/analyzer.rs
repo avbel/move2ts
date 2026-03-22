@@ -161,6 +161,16 @@ fn convert_apply_type(
                     {
                         return MoveType::ObjectId;
                     }
+                    "VecMap"
+                        if root_name == "0x2"
+                            || root_name == "sui"
+                            || (entries.len() >= 2
+                                && entries[0].name.value.as_str() == "vec_map") =>
+                    {
+                        let key = tyargs.first().cloned().unwrap_or(MoveType::U8);
+                        let value = tyargs.get(1).cloned().unwrap_or(MoveType::U8);
+                        return MoveType::VecMap(Box::new(key), Box::new(value));
+                    }
                     _ => {}
                 }
 
@@ -223,6 +233,11 @@ fn convert_single_name(
         "Option" => {
             let inner = tyargs.first().cloned().unwrap_or(MoveType::Unit);
             MoveType::Option(Box::new(inner))
+        }
+        "VecMap" => {
+            let key = tyargs.first().cloned().unwrap_or(MoveType::U8);
+            let value = tyargs.get(1).cloned().unwrap_or(MoveType::U8);
+            MoveType::VecMap(Box::new(key), Box::new(value))
         }
         "String" => MoveType::SuiString,
         "ID" => MoveType::ObjectId,

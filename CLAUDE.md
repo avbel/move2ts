@@ -31,6 +31,7 @@ cargo test
 - Event fields use snake_case (matching Sui indexer wire format)
 - Function param fields use camelCase (TypeScript convention)
 - Generic type params with `key` constraint use `TransactionObjectInput`
+- `VecMap<K, V>` maps to `Map<K, V>` in TypeScript, encoded via `bcs.map()`
 - Singleton detection excludes copy+drop structs (they can't be on-chain objects)
 - Abort-only functions are skipped (deprecated stubs)
 
