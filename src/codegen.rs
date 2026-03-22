@@ -146,7 +146,8 @@ pub fn to_tx_encoding(ty: &MoveType, expr: &str) -> String {
 }
 
 /// Maps MoveType to BCS schema builder call for @mysten/bcs.
-fn to_bcs_schema(ty: &MoveType) -> String {
+/// Accepts module structs to recursively expand nested pure value structs.
+fn to_bcs_schema(ty: &MoveType, structs: &[StructInfo]) -> String {
     match ty {
         MoveType::U8 => "bcs.u8()".to_string(),
         MoveType::U16 => "bcs.u16()".to_string(),
@@ -155,27 +156,44 @@ fn to_bcs_schema(ty: &MoveType) -> String {
         MoveType::U128 => "bcs.u128()".to_string(),
         MoveType::U256 => "bcs.u256()".to_string(),
         MoveType::Bool => "bcs.bool()".to_string(),
-        MoveType::Address => "bcs.Address".to_string(),
+        MoveType::Address => "Address".to_string(),
         MoveType::SuiString => "bcs.string()".to_string(),
-        MoveType::ObjectId => "bcs.Address".to_string(),
-        MoveType::Vector(inner) => format!("bcs.vector({})", to_bcs_schema(inner)),
-        MoveType::Option(inner) => format!("bcs.option({})", to_bcs_schema(inner)),
+        MoveType::ObjectId => "Address".to_string(),
+        MoveType::Vector(inner) => format!("bcs.vector({})", to_bcs_schema(inner, structs)),
+        MoveType::Option(inner) => format!("bcs.option({})", to_bcs_schema(inner, structs)),
+        MoveType::Struct { name, .. } => {
+            if let Some(si) = structs
+                .iter()
+                .find(|s| s.name == *name && s.is_pure_value())
+            {
+                to_bcs_struct_schema(si, structs)
+            } else {
+                "bcs.bytes(32)".to_string() // fallback for unknown/external structs
+            }
+        }
         _ => "bcs.bytes(32)".to_string(), // fallback for unknown
     }
 }
 
-/// Generates a BCS struct serialization call for a pure value struct.
-/// Returns something like: `tx.pure(bcs.struct('Name', { f1: bcs.u64(), f2: bcs.bool() }).serialize(expr))`
-fn to_bcs_struct_encoding(struct_info: &StructInfo, expr: &str) -> String {
+/// Generates a BCS struct schema expression for a pure value struct.
+/// Returns something like: `bcs.struct('Name', { f1: bcs.u64(), f2: bcs.bool() })`
+fn to_bcs_struct_schema(struct_info: &StructInfo, structs: &[StructInfo]) -> String {
     let field_schemas: Vec<String> = struct_info
         .fields
         .iter()
-        .map(|(name, ty)| format!("{}: {}", to_camel_case(name), to_bcs_schema(ty)))
+        .map(|(name, ty)| format!("{}: {}", to_camel_case(name), to_bcs_schema(ty, structs)))
         .collect();
     let fields_str = field_schemas.join(", ");
+    format!("bcs.struct('{}', {{ {} }})", struct_info.name, fields_str)
+}
+
+/// Generates a BCS struct serialization call for a pure value struct.
+/// Returns something like: `tx.pure(bcs.struct('Name', { f1: bcs.u64(), f2: bcs.bool() }).serialize(expr))`
+fn to_bcs_struct_encoding(struct_info: &StructInfo, expr: &str, structs: &[StructInfo]) -> String {
     format!(
-        "tx.pure(bcs.struct('{}', {{ {} }}).serialize({}))",
-        struct_info.name, fields_str, expr
+        "tx.pure({}.serialize({}))",
+        to_bcs_struct_schema(struct_info, structs),
+        expr
     )
 }
 
@@ -188,12 +206,34 @@ fn to_tx_encoding_with_context(ty: &MoveType, expr: &str, structs: &[StructInfo]
             if let Some(si) = structs.iter().find(|s| s.name == *name)
                 && si.is_pure_value()
             {
-                return to_bcs_struct_encoding(si, expr);
+                return to_bcs_struct_encoding(si, expr, structs);
             }
             // Default: treat as object
             format!("tx.object({expr})")
         }
         _ => to_tx_encoding(ty, expr),
+    }
+}
+
+/// Returns true if a MoveType contains Address or ObjectId anywhere in its tree,
+/// including inside nested pure value structs from the same module.
+fn type_contains_address(ty: &MoveType, structs: &[StructInfo]) -> bool {
+    match ty {
+        MoveType::Address | MoveType::ObjectId => true,
+        MoveType::Vector(inner) | MoveType::Option(inner) => type_contains_address(inner, structs),
+        MoveType::Struct { name, .. } => {
+            if let Some(si) = structs
+                .iter()
+                .find(|s| s.name == *name && s.is_pure_value())
+            {
+                si.fields
+                    .iter()
+                    .any(|(_, ty)| type_contains_address(ty, structs))
+            } else {
+                false
+            }
+        }
+        _ => false,
     }
 }
 
@@ -254,18 +294,25 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     w.line(&format!("// Generated at: {now}"));
     w.blank();
 
-    // Check if any function uses a pure value struct
-    let needs_bcs = module.functions.iter().any(|f| {
-        f.params.iter().any(|p| {
-            if let MoveType::Struct { name, .. } = &p.move_type {
-                module
-                    .structs
-                    .iter()
-                    .any(|s| s.name == *name && s.is_pure_value())
-            } else {
-                false
-            }
+    // Collect pure value structs referenced by function params (for BCS + Address import detection)
+    let used_pure_structs: Vec<&StructInfo> = module
+        .structs
+        .iter()
+        .filter(|s| {
+            s.is_pure_value()
+                && module.functions.iter().any(|f| {
+                    f.params.iter().any(|p| {
+                        matches!(&p.move_type, MoveType::Struct { name, .. } if *name == s.name)
+                    })
+                })
         })
+        .collect();
+
+    let needs_bcs = !used_pure_structs.is_empty();
+    let needs_address = used_pure_structs.iter().any(|s| {
+        s.fields
+            .iter()
+            .any(|(_, ty)| type_contains_address(ty, &module.structs))
     });
 
     // --- Imports ---
@@ -278,6 +325,9 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     w.line("import { InvalidConfigError } from './move2ts-errors';");
     if needs_bcs {
         w.line("import { bcs } from '@mysten/bcs';");
+    }
+    if needs_address {
+        w.line("import { Address } from '@mysten/sui/bcs';");
     }
     w.blank();
 
@@ -1417,25 +1467,57 @@ mod tests {
 
     #[test]
     fn bcs_schema_primitives() {
-        assert_eq!(to_bcs_schema(&MoveType::U8), "bcs.u8()");
-        assert_eq!(to_bcs_schema(&MoveType::U64), "bcs.u64()");
-        assert_eq!(to_bcs_schema(&MoveType::Bool), "bcs.bool()");
-        assert_eq!(to_bcs_schema(&MoveType::Address), "bcs.Address");
-        assert_eq!(to_bcs_schema(&MoveType::SuiString), "bcs.string()");
-        assert_eq!(to_bcs_schema(&MoveType::ObjectId), "bcs.Address");
+        assert_eq!(to_bcs_schema(&MoveType::U8, &[]), "bcs.u8()");
+        assert_eq!(to_bcs_schema(&MoveType::U64, &[]), "bcs.u64()");
+        assert_eq!(to_bcs_schema(&MoveType::Bool, &[]), "bcs.bool()");
+        assert_eq!(to_bcs_schema(&MoveType::Address, &[]), "Address");
+        assert_eq!(to_bcs_schema(&MoveType::SuiString, &[]), "bcs.string()");
+        assert_eq!(to_bcs_schema(&MoveType::ObjectId, &[]), "Address");
+    }
+
+    #[test]
+    fn type_contains_address_recursion() {
+        assert!(type_contains_address(&MoveType::Address, &[]));
+        assert!(type_contains_address(&MoveType::ObjectId, &[]));
+        assert!(type_contains_address(
+            &MoveType::Vector(Box::new(MoveType::Address)),
+            &[]
+        ));
+        assert!(type_contains_address(
+            &MoveType::Option(Box::new(MoveType::ObjectId)),
+            &[]
+        ));
+        assert!(type_contains_address(
+            &MoveType::Vector(Box::new(MoveType::Option(Box::new(MoveType::Address)))),
+            &[]
+        ));
+        assert!(!type_contains_address(&MoveType::U64, &[]));
+        assert!(!type_contains_address(
+            &MoveType::Vector(Box::new(MoveType::U64)),
+            &[]
+        ));
+        // Unknown struct (not in module) returns false
+        assert!(!type_contains_address(
+            &MoveType::Struct {
+                module: None,
+                name: "Foo".to_string(),
+                type_args: vec![],
+            },
+            &[]
+        ));
     }
 
     #[test]
     fn bcs_schema_nested() {
         let vec_u64 = MoveType::Vector(Box::new(MoveType::U64));
-        assert_eq!(to_bcs_schema(&vec_u64), "bcs.vector(bcs.u64())");
+        assert_eq!(to_bcs_schema(&vec_u64, &[]), "bcs.vector(bcs.u64())");
 
         let opt_bool = MoveType::Option(Box::new(MoveType::Bool));
-        assert_eq!(to_bcs_schema(&opt_bool), "bcs.option(bcs.bool())");
+        assert_eq!(to_bcs_schema(&opt_bool, &[]), "bcs.option(bcs.bool())");
 
         let vec_opt_u8 = MoveType::Vector(Box::new(MoveType::Option(Box::new(MoveType::U8))));
         assert_eq!(
-            to_bcs_schema(&vec_opt_u8),
+            to_bcs_schema(&vec_opt_u8, &[]),
             "bcs.vector(bcs.option(bcs.u8()))"
         );
     }
@@ -1453,11 +1535,230 @@ mod tests {
             has_copy: true,
             has_drop: true,
         };
-        let result = to_bcs_struct_encoding(&si, "args.data");
+        let result = to_bcs_struct_encoding(&si, "args.data", &[]);
         assert_eq!(
             result,
             "tx.pure(bcs.struct('MyData', { value: bcs.u64(), flag: bcs.bool(), name: bcs.string() }).serialize(args.data))"
         );
+    }
+
+    #[test]
+    fn bcs_schema_expands_nested_pure_struct() {
+        let inner = StructInfo {
+            name: "Inner".to_string(),
+            fields: vec![("value".to_string(), MoveType::U64)],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let structs = vec![inner];
+        let ty = MoveType::Struct {
+            module: None,
+            name: "Inner".to_string(),
+            type_args: vec![],
+        };
+        assert_eq!(
+            to_bcs_schema(&ty, &structs),
+            "bcs.struct('Inner', { value: bcs.u64() })"
+        );
+    }
+
+    #[test]
+    fn bcs_schema_falls_back_for_non_pure_struct() {
+        let key_struct = StructInfo {
+            name: "Pool".to_string(),
+            fields: vec![("balance".to_string(), MoveType::U64)],
+            has_key: true,
+            has_copy: false,
+            has_drop: false,
+        };
+        let structs = vec![key_struct];
+        let ty = MoveType::Struct {
+            module: None,
+            name: "Pool".to_string(),
+            type_args: vec![],
+        };
+        assert_eq!(to_bcs_schema(&ty, &structs), "bcs.bytes(32)");
+    }
+
+    #[test]
+    fn bcs_struct_encoding_with_nested_struct() {
+        let inner = StructInfo {
+            name: "Inner".to_string(),
+            fields: vec![
+                ("value".to_string(), MoveType::U64),
+                ("flag".to_string(), MoveType::Bool),
+            ],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let outer = StructInfo {
+            name: "Outer".to_string(),
+            fields: vec![
+                (
+                    "inner".to_string(),
+                    MoveType::Struct {
+                        module: None,
+                        name: "Inner".to_string(),
+                        type_args: vec![],
+                    },
+                ),
+                ("count".to_string(), MoveType::U64),
+            ],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let structs = vec![inner, outer.clone()];
+        let result = to_bcs_struct_encoding(&outer, "args.outer", &structs);
+        assert_eq!(
+            result,
+            "tx.pure(bcs.struct('Outer', { inner: bcs.struct('Inner', { value: bcs.u64(), flag: bcs.bool() }), count: bcs.u64() }).serialize(args.outer))"
+        );
+    }
+
+    #[test]
+    fn bcs_struct_encoding_with_vector_of_nested_struct() {
+        let inner = StructInfo {
+            name: "Item".to_string(),
+            fields: vec![
+                ("price".to_string(), MoveType::U64),
+                ("name".to_string(), MoveType::SuiString),
+            ],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let outer = StructInfo {
+            name: "Order".to_string(),
+            fields: vec![
+                (
+                    "items".to_string(),
+                    MoveType::Vector(Box::new(MoveType::Struct {
+                        module: None,
+                        name: "Item".to_string(),
+                        type_args: vec![],
+                    })),
+                ),
+                ("total".to_string(), MoveType::U64),
+            ],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let structs = vec![inner, outer.clone()];
+        let result = to_bcs_struct_encoding(&outer, "args.order", &structs);
+        assert_eq!(
+            result,
+            "tx.pure(bcs.struct('Order', { items: bcs.vector(bcs.struct('Item', { price: bcs.u64(), name: bcs.string() })), total: bcs.u64() }).serialize(args.order))"
+        );
+    }
+
+    #[test]
+    fn bcs_struct_encoding_with_option_of_nested_struct() {
+        let inner = StructInfo {
+            name: "Metadata".to_string(),
+            fields: vec![("label".to_string(), MoveType::SuiString)],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let outer = StructInfo {
+            name: "Entry".to_string(),
+            fields: vec![
+                ("value".to_string(), MoveType::U64),
+                (
+                    "metadata".to_string(),
+                    MoveType::Option(Box::new(MoveType::Struct {
+                        module: None,
+                        name: "Metadata".to_string(),
+                        type_args: vec![],
+                    })),
+                ),
+            ],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let structs = vec![inner, outer.clone()];
+        let result = to_bcs_struct_encoding(&outer, "args.entry", &structs);
+        assert_eq!(
+            result,
+            "tx.pure(bcs.struct('Entry', { value: bcs.u64(), metadata: bcs.option(bcs.struct('Metadata', { label: bcs.string() })) }).serialize(args.entry))"
+        );
+    }
+
+    #[test]
+    fn type_contains_address_through_vector_of_struct() {
+        let inner = StructInfo {
+            name: "Target".to_string(),
+            fields: vec![("addr".to_string(), MoveType::Address)],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let structs = vec![inner];
+
+        // Vector<Target> where Target has an address field
+        assert!(type_contains_address(
+            &MoveType::Vector(Box::new(MoveType::Struct {
+                module: None,
+                name: "Target".to_string(),
+                type_args: vec![],
+            })),
+            &structs
+        ));
+
+        // Option<Target>
+        assert!(type_contains_address(
+            &MoveType::Option(Box::new(MoveType::Struct {
+                module: None,
+                name: "Target".to_string(),
+                type_args: vec![],
+            })),
+            &structs
+        ));
+    }
+
+    #[test]
+    fn type_contains_address_recurses_into_nested_struct() {
+        let inner_with_id = StructInfo {
+            name: "Inner".to_string(),
+            fields: vec![("target".to_string(), MoveType::ObjectId)],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let inner_no_id = StructInfo {
+            name: "Plain".to_string(),
+            fields: vec![("value".to_string(), MoveType::U64)],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+
+        let structs = vec![inner_with_id, inner_no_id];
+
+        // Struct with address field inside
+        assert!(type_contains_address(
+            &MoveType::Struct {
+                module: None,
+                name: "Inner".to_string(),
+                type_args: vec![],
+            },
+            &structs
+        ));
+
+        // Struct without address field
+        assert!(!type_contains_address(
+            &MoveType::Struct {
+                module: None,
+                name: "Plain".to_string(),
+                type_args: vec![],
+            },
+            &structs
+        ));
     }
 
     #[test]
@@ -1619,6 +1920,235 @@ mod tests {
         assert!(
             !output.contains("@mysten/bcs"),
             "should NOT import bcs when no pure structs"
+        );
+    }
+
+    #[test]
+    fn imports_address_when_pure_struct_has_id_field() {
+        let module = ModuleInfo {
+            name: "receipt_mod".to_string(),
+            functions: vec![FunctionInfo {
+                name: "submit_receipt".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "receipt".to_string(),
+                    move_type: MoveType::Struct {
+                        module: None,
+                        name: "Receipt".to_string(),
+                        type_args: vec![],
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![StructInfo {
+                name: "Receipt".to_string(),
+                fields: vec![
+                    ("item_id".to_string(), MoveType::ObjectId),
+                    ("amount".to_string(), MoveType::U64),
+                ],
+                has_key: false,
+                has_copy: true,
+                has_drop: true,
+            }],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            output.contains("import { Address } from '@mysten/sui/bcs';"),
+            "should import Address from @mysten/sui/bcs"
+        );
+        assert!(
+            output.contains("itemId: Address"),
+            "should use Address (not bcs.Address) in struct schema"
+        );
+    }
+
+    #[test]
+    fn no_address_import_when_pure_struct_has_no_id() {
+        let module = ModuleInfo {
+            name: "config_mod".to_string(),
+            functions: vec![FunctionInfo {
+                name: "set_config".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "config".to_string(),
+                    move_type: MoveType::Struct {
+                        module: None,
+                        name: "Config".to_string(),
+                        type_args: vec![],
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![StructInfo {
+                name: "Config".to_string(),
+                fields: vec![("max_size".to_string(), MoveType::U64)],
+                has_key: false,
+                has_copy: true,
+                has_drop: true,
+            }],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            !output.contains("@mysten/sui/bcs"),
+            "should NOT import Address when no Address/ObjectId fields"
+        );
+    }
+
+    #[test]
+    fn nested_pure_struct_generates_nested_bcs() {
+        let module = ModuleInfo {
+            name: "nested_mod".to_string(),
+            functions: vec![FunctionInfo {
+                name: "submit".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "outer".to_string(),
+                    move_type: MoveType::Struct {
+                        module: None,
+                        name: "Outer".to_string(),
+                        type_args: vec![],
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![
+                StructInfo {
+                    name: "Inner".to_string(),
+                    fields: vec![("value".to_string(), MoveType::U64)],
+                    has_key: false,
+                    has_copy: true,
+                    has_drop: true,
+                },
+                StructInfo {
+                    name: "Outer".to_string(),
+                    fields: vec![
+                        (
+                            "inner".to_string(),
+                            MoveType::Struct {
+                                module: None,
+                                name: "Inner".to_string(),
+                                type_args: vec![],
+                            },
+                        ),
+                        ("count".to_string(), MoveType::U64),
+                    ],
+                    has_key: false,
+                    has_copy: true,
+                    has_drop: true,
+                },
+            ],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            output.contains("bcs.struct('Inner', { value: bcs.u64() })"),
+            "should expand Inner struct inline in BCS schema, got:\n{output}"
+        );
+        assert!(
+            output.contains("bcs.struct('Outer'"),
+            "should have Outer struct in BCS schema"
+        );
+    }
+
+    #[test]
+    fn imports_address_for_nested_struct_with_id() {
+        let module = ModuleInfo {
+            name: "nested_addr_mod".to_string(),
+            functions: vec![FunctionInfo {
+                name: "submit".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "outer".to_string(),
+                    move_type: MoveType::Struct {
+                        module: None,
+                        name: "Outer".to_string(),
+                        type_args: vec![],
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }],
+            structs: vec![
+                StructInfo {
+                    name: "Inner".to_string(),
+                    fields: vec![("target".to_string(), MoveType::ObjectId)],
+                    has_key: false,
+                    has_copy: true,
+                    has_drop: true,
+                },
+                StructInfo {
+                    name: "Outer".to_string(),
+                    fields: vec![
+                        (
+                            "inner".to_string(),
+                            MoveType::Struct {
+                                module: None,
+                                name: "Inner".to_string(),
+                                type_args: vec![],
+                            },
+                        ),
+                        ("count".to_string(), MoveType::U64),
+                    ],
+                    has_key: false,
+                    has_copy: true,
+                    has_drop: true,
+                },
+            ],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::new(),
+        };
+
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+
+        let output = generate_module(&module, &config);
+        assert!(
+            output.contains("import { Address } from '@mysten/sui/bcs';"),
+            "should import Address when nested struct has ObjectId field"
+        );
+        assert!(
+            output.contains("target: Address"),
+            "nested Inner struct should use Address in BCS schema"
         );
     }
 
