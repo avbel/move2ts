@@ -389,7 +389,18 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
         .iter()
         .any(|f| f.params.iter().any(|p| type_contains_vecmap(&p.move_type)));
 
-    let needs_bcs = !used_pure_structs.is_empty() || has_vecmap_param;
+    // Emitted-event structs that get BCS schemas (only when --events is enabled).
+    let event_structs: Vec<&StructInfo> = if config.include_events {
+        module
+            .structs
+            .iter()
+            .filter(|s| module.emitted_events.contains(&s.name))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let needs_bcs = !used_pure_structs.is_empty() || has_vecmap_param || !event_structs.is_empty();
     let needs_address = used_pure_structs.iter().any(|s| {
         s.fields
             .iter()
@@ -398,6 +409,10 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
         f.params
             .iter()
             .any(|p| param_vecmap_contains_address(&p.move_type, &module.structs))
+    }) || event_structs.iter().any(|s| {
+        s.fields
+            .iter()
+            .any(|(_, ty)| type_contains_address(ty, &module.structs))
     });
 
     // --- Imports ---
@@ -420,6 +435,7 @@ pub fn generate_module(module: &ModuleInfo, config: &CodegenConfig) -> String {
     let referenced_structs = collect_referenced_structs(module);
     if config.include_events {
         generate_event_types(&mut w, module, &referenced_structs);
+        generate_event_bcs_schemas(&mut w, &event_structs, &module.structs);
     }
 
     // --- Struct interfaces (only for structs referenced in function params) ---
@@ -478,6 +494,22 @@ fn generate_event_types(w: &mut CodeWriter, module: &ModuleInfo, referenced: &Ha
         }
         w.dedent();
         w.line("};");
+        w.blank();
+    }
+}
+
+/// Generates `export const <Name> = bcs.struct(...)` schemas for emitted events,
+/// so callers can decode raw event BCS bytes (`SuiEvent.bcs`) into typed values.
+/// Field keys use the same camelCase convention as param-struct BCS schemas. The
+/// schema const coexists with the snake_case `export type` (TS keeps type and
+/// value namespaces separate, so sharing the event name is legal).
+fn generate_event_bcs_schemas(w: &mut CodeWriter, events: &[&StructInfo], structs: &[StructInfo]) {
+    for event in events {
+        w.line(&format!(
+            "export const {} = {};",
+            event.name,
+            to_bcs_struct_schema(event, structs)
+        ));
         w.blank();
     }
 }
@@ -2078,6 +2110,126 @@ mod tests {
             !output.contains("tx.object(args.config)"),
             "should NOT use tx.object for pure struct"
         );
+    }
+
+    /// Builds a module with one emitted event (`Trade`) carrying mixed field types,
+    /// plus an optional same-named function param to exercise the collision case.
+    fn event_module(emit_as_param: bool) -> ModuleInfo {
+        let trade = StructInfo {
+            name: "Trade".to_string(),
+            fields: vec![
+                ("trade_amount".to_string(), MoveType::U64),
+                ("is_buy".to_string(), MoveType::Bool),
+                ("counterparty".to_string(), MoveType::Address),
+            ],
+            has_key: false,
+            has_copy: true,
+            has_drop: true,
+        };
+        let functions = if emit_as_param {
+            vec![FunctionInfo {
+                name: "do_trade".to_string(),
+                is_entry: false,
+                type_params: vec![],
+                params: vec![ParamInfo {
+                    name: "trade".to_string(),
+                    move_type: MoveType::Struct {
+                        module: None,
+                        name: "Trade".to_string(),
+                        type_args: vec![],
+                    },
+                    is_singleton: false,
+                }],
+                has_clock_param: false,
+                has_random_param: false,
+            }]
+        } else {
+            vec![]
+        };
+        ModuleInfo {
+            name: "trades".to_string(),
+            functions,
+            structs: vec![trade],
+            singletons: HashSet::new(),
+            emitted_events: HashSet::from(["Trade".to_string()]),
+        }
+    }
+
+    #[test]
+    fn event_gets_bcs_schema_const_with_camelcase_fields() {
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: true,
+        };
+        let output = generate_module(&event_module(false), &config);
+
+        // BCS schema const, camelCase keys, correct encoders.
+        assert!(
+            output.contains("export const Trade = bcs.struct('Trade', {"),
+            "event should get a BCS schema const, got:\n{output}"
+        );
+        assert!(output.contains("tradeAmount: bcs.u64()"));
+        assert!(output.contains("isBuy: bcs.bool()"));
+        assert!(output.contains("counterparty: bcs.Address"));
+        assert!(
+            !output.contains("trade_amount: bcs"),
+            "BCS field keys should be camelCase, not snake_case"
+        );
+
+        // Coexists additively with the snake_case parsedJson string type.
+        assert!(output.contains("export type Trade = {"));
+        assert!(output.contains("readonly trade_amount: string;"));
+    }
+
+    #[test]
+    fn event_bcs_triggers_bcs_import_for_event_only_module() {
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: true,
+        };
+        let output = generate_module(&event_module(false), &config);
+        // Address-bearing event selects the Sui bcs re-export (which provides bcs.Address).
+        assert!(
+            output.contains("import { bcs } from '@mysten/sui/bcs';"),
+            "event with address field should import Sui bcs, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn no_event_bcs_schema_when_events_disabled() {
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: false,
+        };
+        let output = generate_module(&event_module(false), &config);
+        assert!(
+            !output.contains("export const Trade = bcs.struct"),
+            "no event BCS schema should be emitted without --events"
+        );
+        assert!(!output.contains("@mysten/bcs") && !output.contains("@mysten/sui/bcs"));
+    }
+
+    #[test]
+    fn event_bcs_schema_emitted_once_when_also_param() {
+        let config = CodegenConfig {
+            package_id_env_var: "MY_PROJECT_PACKAGE_ID".to_string(),
+            project_name: "my_project".to_string(),
+            include_events: true,
+        };
+        let output = generate_module(&event_module(true), &config);
+
+        // Exactly one top-level schema const, despite Trade also being a param.
+        assert_eq!(
+            output.matches("export const Trade = bcs.struct").count(),
+            1,
+            "schema const should be emitted exactly once, got:\n{output}"
+        );
+        // The param version is suffixed and keeps its own interface — no clash.
+        assert!(output.contains("export type TradeEvent = {"));
+        assert!(output.contains("export interface Trade {"));
     }
 
     #[test]

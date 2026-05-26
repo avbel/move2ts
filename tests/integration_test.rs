@@ -452,6 +452,27 @@ fn full_pipeline_events() {
     // TradeInfo should also have BCS interface (for the param usage)
     assert!(ts_output.contains("export interface TradeInfo {"));
 
+    // Each emitted event also gets a BCS schema const for decoding raw event bytes.
+    assert!(
+        ts_output.contains(
+            "export const ItemPurchased = bcs.struct('ItemPurchased', { buyer: bcs.Address, seller: bcs.Address, price: bcs.u64(), itemId: bcs.Address });"
+        ),
+        "ItemPurchased should get a BCS schema with camelCase keys, got:\n{ts_output}"
+    );
+    assert!(ts_output.contains("export const ListingCreated = bcs.struct('ListingCreated',"));
+    assert!(ts_output.contains("export const FeeCollected = bcs.struct('FeeCollected',"));
+    // Emitted-and-param struct gets exactly one schema const (no name clash with its interface).
+    assert_eq!(
+        ts_output
+            .matches("export const TradeInfo = bcs.struct")
+            .count(),
+        1
+    );
+    // Non-emitted param struct gets no event BCS schema const.
+    assert!(!ts_output.contains("export const PriceRange = bcs.struct"));
+    // Address-bearing events select the Sui bcs re-export (provides bcs.Address).
+    assert!(ts_output.contains("import { bcs } from '@mysten/sui/bcs';"));
+
     // PriceRange is NOT emitted — no event type
     assert!(!ts_output.contains("export type PriceRange"));
     // PriceRange should still have BCS interface (used as param)
