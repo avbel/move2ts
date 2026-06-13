@@ -208,6 +208,6 @@ jobs:
         run: |
           ROOT="$PWD"
           for pkg in linux-x64 linux-arm64 darwin-arm64 win32-x64; do
-            cd "$ROOT/npm/$pkg" && npm publish --access public
+            cd "$ROOT/npm/$pkg" && npm publish --access public --provenance
           done
-          cd "$ROOT/npm/move2ts" && npm publish --access public
+          cd "$ROOT/npm/move2ts" && npm publish --access public --provenance
