@@ -30,7 +30,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/avbel/move2ts"
+    "url": "git+https://github.com/avbel/move2ts.git"
   },
   "publishConfig": {
     "access": "public"
