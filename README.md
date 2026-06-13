@@ -18,6 +18,7 @@ Generate type-safe TypeScript wrappers for Sui Move smart contracts.
 - Supports generic type parameters
 - Skips abort-only functions (deprecated stubs like `abort E_DEPRECATED`)
 - CLI filtering: `--methods`, `--skip-methods`
+- Optional event output: parsed JSON event types plus BCS schemas for raw event bytes
 - Portable generated code: works with Node.js, Deno, Bun
 
 ## Installation
@@ -82,7 +83,7 @@ Options:
   --skip-methods <m1,m2>           Skip these methods
   --singletons <Struct1,Struct2>   Manual singleton overrides (struct names)
   --package-id-name <ENV_VAR>      Override package ID env var name
-  --events                         Include event type definitions in output
+  --events                         Include event type definitions and BCS schemas in output
 ```
 
 ### Environment Variables
@@ -217,9 +218,14 @@ A shared `move2ts-errors.ts` file is also generated with the `InvalidConfigError
 
 ### Event Types (`--events`)
 
-When `--events` is passed, the tool detects structs emitted via `event::emit()` and generates `export type` declarations with all fields as `readonly string`:
+When `--events` is passed, the tool detects structs emitted via `event::emit()` and generates two event artifacts:
+
+- `export type` declarations for parsed JSON events returned by Sui RPC/indexers. These keep Move field names as `snake_case`, and every field is `readonly string` because parsed event JSON is string-shaped.
+- `export const <EventName> = bcs.struct(...)` schemas for decoding raw event bytes from `SuiEvent.bcs`. These use the same camelCase field keys as generated BCS schemas for pure value structs.
 
 ```typescript
+import { bcs } from '@mysten/sui/bcs';
+
 // --- Event Types ---
 
 export type ItemPurchased = {
@@ -228,11 +234,30 @@ export type ItemPurchased = {
   readonly price: string;
   readonly item_id: string;
 };
+
+export const ItemPurchased = bcs.struct('ItemPurchased', {
+  buyer: bcs.Address,
+  seller: bcs.Address,
+  price: bcs.u64(),
+  itemId: bcs.Address,
+});
 ```
 
 Event detection works by scanning function bodies for `event::emit()` calls. Only actually emitted structs are included — copy+drop structs that are never emitted are excluded.
 
-If a struct is both emitted AND used as a function parameter, two types are generated: a BCS `interface` (for the param) and a `type` with an `Event` suffix (for event consumption).
+If a struct is both emitted AND used as a function parameter, the generated event JSON type gets an `Event` suffix to avoid colliding with the parameter `interface`. The BCS schema const keeps the struct name:
+
+```typescript
+export interface TradeInfo {
+  readonly price: bigint;
+}
+
+export type TradeInfoEvent = {
+  readonly price: string;
+};
+
+export const TradeInfo = bcs.struct('TradeInfo', { price: bcs.u64() });
+```
 
 ## Usage Scenarios
 
