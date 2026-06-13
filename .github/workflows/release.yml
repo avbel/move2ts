@@ -168,6 +168,7 @@ jobs:
   publish-npm:
     needs: build
     permissions:
+      contents: read
       id-token: write
     runs-on: ubuntu-latest
     steps:
@@ -176,10 +177,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -209,11 +206,9 @@ jobs:
           chmod +x npm/linux-x64/move2ts npm/linux-arm64/move2ts npm/darwin-arm64/move2ts
 
       - name: Publish platform packages then main package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           ROOT="$PWD"
           for pkg in linux-x64 linux-arm64 darwin-arm64 win32-x64; do
-            cd "$ROOT/npm/$pkg" && pnpm publish --access public --no-git-checks --provenance
+            cd "$ROOT/npm/$pkg" && npm publish --access public
           done
-          cd "$ROOT/npm/move2ts" && pnpm publish --access public --no-git-checks --provenance
+          cd "$ROOT/npm/move2ts" && npm publish --access public
